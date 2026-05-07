@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+ENV/
+
+# Datasets & Large Files
+data/
+weights/
+yolov8n.pt
+ffmpeg.zip
+ffmpeg-7.1-full_build/
+*.mp4
+*.avi
+*.mkv
+
+# Logs & Checkpoints
+logs/
+checkpoints/
+*.log
+
+# IDEs
+.vscode/
+.idea/
+.DS_Store
+
+# UI/Build
+dashboard/uploads/

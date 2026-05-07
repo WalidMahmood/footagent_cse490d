@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FootAgent | 3D Intelligence Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        :root {
+            --bg: #050505;
+            --glass: rgba(255, 255, 255, 0.05);
+            --accent: #00ff88;
+            --accent-glow: rgba(0, 255, 136, 0.3);
+            --text: #ffffff;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif; }
+        body { background: var(--bg); color: var(--text); overflow: hidden; }
+
+        #container { width: 100vw; height: 100vh; position: relative; }
+        
+        /* Glassmorphism Sidebar */
+        .sidebar {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            width: 320px;
+            height: calc(100vh - 40px);
+            background: var(--glass);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 24px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            z-index: 10;
+        }
+
+        .header h1 { font-size: 24px; font-weight: 800; letter-spacing: -1px; background: linear-gradient(90deg, #fff, #00ff88); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .header p { font-size: 12px; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; }
+
+        .panel { background: rgba(0,0,0,0.3); padding: 16px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); }
+        .panel-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between; }
+        
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+        .stat-value { color: var(--accent); font-weight: 600; }
+
+        .upload-btn {
+            background: var(--accent);
+            color: #000;
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: center;
+            text-decoration: none;
+            display: block;
+        }
+        .upload-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px var(--accent-glow); }
+
+        #threejs-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+
+        .log-container { flex: 1; overflow-y: auto; font-size: 11px; color: rgba(255,255,255,0.7); }
+        .log-entry { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        .log-time { color: var(--accent); margin-right: 6px; }
+
+        /* Status Pill */
+        .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 10px; background: rgba(255,255,255,0.1); }
+        .status-active { background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent); }
+
+        /* Controls */
+        .controls { position: absolute; bottom: 20px; right: 20px; display: flex; gap: 10px; z-index: 10; }
+        .ctrl-btn { background: var(--glass); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 12px; border-radius: 50%; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="threejs-canvas"></div>
+
+        <div class="sidebar">
+            <div class="header">
+                <h1>FOOTAGENT <span style="font-weight: 300;">3D</span></h1>
+                <p>Advanced Match Intelligence</p>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">System Status <span id="status-pill" class="status-pill">OFFLINE</span></div>
+                <div class="stat-row"><span>VRAM Usage</span><span class="stat-value" id="vram-val">0.0 GB</span></div>
+                <div class="stat-row"><span>OBC Score</span><span class="stat-value" id="obc-val">0.0000</span></div>
+                <div class="stat-row"><span>Threat Level</span><span class="stat-value" id="threat-val">LOW</span></div>
+                <div class="stat-row"><span>Active Models</span><span class="stat-value" id="models-val">None</span></div>
+                <div class="stat-row"><span>Frame Index</span><span class="stat-value" id="frame-val">0</span></div>
+            </div>
+
+            <div class="panel">
+                <div class="panel-title">Upload Match</div>
+                <input type="file" id="video-upload" style="display: none;" accept="video/*">
+                <label for="video-upload" class="upload-btn">CHOOSE VIDEO</label>
+                <div id="upload-status" style="font-size: 11px; margin-top: 10px; text-align: center; opacity: 0.7;"></div>
+            </div>
+
+            <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
+                <div class="panel-title">Incident Log</div>
+                <div id="log" class="log-container">
+                    <div class="log-entry">Waiting for pipeline initialization...</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="ctrl-btn" onclick="resetCamera()">🔄</button>
+            <button class="ctrl-btn" onclick="toggleWireframe()">🕸️</button>
+        </div>
+    </div>
+
+    <script src="pitch3d.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
