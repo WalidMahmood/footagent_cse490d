@@ -55,9 +55,8 @@ Detailed analysis, including hyperparameters and ablation studies, can be found 
 -   **Tracking MOTA**: 0.92
 -   **Pipeline Throughput**: ~42 FPS (Full processing)
 
-## 🤝 Authors
+## 🤝 Author
 
--   **Antigravity AI**
 -   **Walid Mahmood**
 
 ---
