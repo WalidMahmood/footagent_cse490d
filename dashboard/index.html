@@ -9,347 +9,347 @@
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <style>
         :root {
-            --bg: #0a0a0f;
-            --surface: rgba(255,255,255,0.03);
-            --surface-hover: rgba(255,255,255,0.06);
-            --border: rgba(255,255,255,0.08);
+            --bg: #04040a;
+            --glass: rgba(4,4,14,0.82);
+            --glass-light: rgba(255,255,255,0.04);
+            --border: rgba(255,255,255,0.07);
+            --border-accent: rgba(0,232,123,0.2);
             --accent: #00e87b;
-            --accent-dim: rgba(0,232,123,0.15);
+            --accent-dim: rgba(0,232,123,0.12);
+            --accent-glow: rgba(0,232,123,0.35);
             --danger: #ff3b5c;
             --warn: #ffb800;
-            --text: #e8e8e8;
-            --text-dim: rgba(255,255,255,0.45);
-            --text-muted: rgba(255,255,255,0.25);
-            --radius: 16px;
+            --text: #eaeaea;
+            --text-dim: rgba(255,255,255,0.42);
+            --text-muted: rgba(255,255,255,0.2);
+            --radius: 14px;
+            --radius-sm: 8px;
         }
-
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg); font-family: 'Inter', sans-serif; color: var(--text); }
 
-        #app { width: 100vw; height: 100vh; display: grid; grid-template-columns: 340px 1fr 320px; grid-template-rows: 60px 1fr 220px; }
+        /* 3D Canvas fills entire background */
+        #pitch-canvas {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 0;
+        }
+        #pitch-canvas canvas {
+            display: block;
+            width: 100% !important;
+            height: 100% !important;
+        }
 
-        /* Top Bar */
-        .topbar {
-            grid-column: 1 / -1;
+        /* TOP BAR */
+        #topbar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 56px;
+            z-index: 100;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 24px;
+            padding: 0 20px;
+            background: linear-gradient(180deg, rgba(4,4,14,0.97) 0%, rgba(4,4,14,0.6) 100%);
             border-bottom: 1px solid var(--border);
-            background: rgba(10,10,15,0.9);
-            backdrop-filter: blur(20px);
-            z-index: 20;
+            backdrop-filter: blur(24px);
         }
-        .logo { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+        .logo { font-size: 17px; font-weight: 900; letter-spacing: 1px; }
         .logo span { color: var(--accent); }
-        .topbar-stats { display: flex; gap: 28px; }
-        .topbar-stat { text-align: center; }
-        .topbar-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim); }
-        .topbar-stat-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
-        .topbar-right { display: flex; align-items: center; gap: 12px; }
-        .status-badge { padding: 4px 14px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }
-        .status-offline { background: rgba(255,255,255,0.06); color: var(--text-dim); }
-        .status-live { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,232,123,0.3); animation: pulse 2s infinite; }
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .logo sub { font-size: 9px; font-weight: 400; color: var(--text-dim); margin-left: 6px; letter-spacing: 0; vertical-align: middle; }
 
-        /* Left Sidebar */
-        .sidebar-left {
-            grid-row: 2 / 4;
-            border-right: 1px solid var(--border);
-            padding: 16px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            background: rgba(10,10,15,0.6);
-        }
+        .topbar-metrics { display: flex; gap: 28px; align-items: center; }
+        .metric { text-align: center; }
+        .metric-label { font-size: 9px; text-transform: uppercase; letter-spacing: 1.8px; color: var(--text-muted); display: block; }
+        .metric-value { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.3; }
+        .metric-value.green { color: var(--accent); }
+        .metric-value.warn { color: var(--warn); }
 
-        /* 3D Viewport */
-        .viewport {
-            position: relative;
-            overflow: hidden;
-        }
-        #threejs-canvas { width: 100%; height: 100%; }
+        .topbar-right { display: flex; align-items: center; gap: 10px; }
+        .status-badge { padding: 4px 12px; border-radius: 20px; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+        .status-offline { background: rgba(255,255,255,0.05); color: var(--text-dim); border: 1px solid var(--border); }
+        .status-live { background: var(--accent-dim); color: var(--accent); border: 1px solid var(--border-accent); animation: pulse-badge 2s infinite; box-shadow: 0 0 12px var(--accent-glow); }
+        @keyframes pulse-badge { 0%,100%{opacity:1} 50%{opacity:0.65} }
 
-        /* Right Sidebar */
-        .sidebar-right {
-            grid-row: 2 / 4;
-            border-left: 1px solid var(--border);
-            padding: 16px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            background: rgba(10,10,15,0.6);
-        }
-
-        /* Bottom Panel */
-        .bottom-panel {
-            border-top: 1px solid var(--border);
-            padding: 16px 20px;
-            display: flex;
-            gap: 16px;
-            background: rgba(10,10,15,0.8);
-            backdrop-filter: blur(10px);
-        }
-
-        /* Cards */
-        .card {
-            background: var(--surface);
+        /* GLASS PANEL base */
+        .panel {
+            background: var(--glass);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            padding: 16px;
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
         }
-        .card-title {
-            font-size: 11px;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            color: var(--text-dim);
-            margin-bottom: 12px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        .panel-title {
+            font-size: 9px; text-transform: uppercase; letter-spacing: 2px;
+            color: var(--text-dim); padding: 12px 14px 6px;
+            display: flex; justify-content: space-between; align-items: center;
         }
-        .card-title .badge {
-            font-size: 10px;
-            padding: 2px 8px;
-            border-radius: 8px;
-            background: var(--accent-dim);
-            color: var(--accent);
-            text-transform: none;
-            letter-spacing: 0;
+        .badge-sm {
+            font-size: 9px; padding: 2px 7px; border-radius: 6px;
+            background: var(--accent-dim); color: var(--accent);
+            text-transform: none; letter-spacing: 0; font-weight: 600;
         }
 
-        /* Player List */
-        .player-row {
+        /* LEFT PANEL */
+        #left-panel {
+            position: fixed;
+            top: 68px; left: 14px; bottom: 100px;
+            width: 248px;
+            z-index: 50;
             display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 10px;
-            border-radius: 10px;
-            margin-bottom: 4px;
-            transition: background 0.2s;
-            cursor: pointer;
+            flex-direction: column;
+            gap: 8px;
         }
-        .player-row:hover { background: var(--surface-hover); }
-        .player-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-        .player-id { font-size: 13px; font-weight: 600; min-width: 45px; }
-        .player-class { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; min-width: 30px; }
-        .player-obc { font-size: 13px; font-weight: 700; margin-left: auto; font-variant-numeric: tabular-nums; }
-        .obc-high { color: var(--accent); }
+
+        .upload-card { padding: 14px; }
+        .upload-zone {
+            border: 1.5px dashed rgba(0,232,123,0.25);
+            border-radius: 10px; padding: 16px 12px; text-align: center;
+            cursor: pointer; transition: all 0.25s;
+        }
+        .upload-zone:hover { border-color: var(--accent); background: var(--accent-dim); }
+        .upload-zone input { display: none; }
+        .upload-icon { font-size: 22px; color: var(--accent); margin-bottom: 4px; }
+        .upload-text { font-size: 11px; color: var(--text-dim); }
+        #upload-status { font-size: 10px; margin-top: 6px; text-align: center; color: var(--text-dim); min-height: 14px; }
+
+        .player-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        #player-list { flex: 1; overflow-y: auto; padding: 0 6px 8px; }
+
+        .player-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; margin-bottom: 1px; cursor: pointer; transition: background 0.15s; }
+        .player-row:hover { background: rgba(255,255,255,0.05); }
+        .player-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+        .player-id { font-size: 12px; font-weight: 600; min-width: 40px; }
+        .player-cls { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; min-width: 28px; }
+        .player-obc { font-size: 12px; font-weight: 700; margin-left: auto; font-variant-numeric: tabular-nums; }
+        .obc-hi { color: var(--accent); }
         .obc-mid { color: var(--warn); }
-        .obc-low { color: var(--text-dim); }
+        .obc-lo { color: var(--text-muted); }
+        .obc-bar-row { height: 2px; background: rgba(255,255,255,0.05); border-radius: 1px; margin: 0 8px 3px; }
+        .obc-bar-fill { height: 100%; border-radius: 1px; transition: width 0.4s; }
 
-        /* OBC Bar */
-        .obc-bar-container { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; margin-top: 4px; }
-        .obc-bar { height: 100%; border-radius: 2px; transition: width 0.3s; }
+        .models-card { padding: 12px 14px; }
+        .model-item { font-size: 11px; color: var(--text-dim); padding: 3px 0; display: flex; align-items: center; gap: 6px; }
+        .model-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 4px var(--accent); flex-shrink: 0; }
 
-        /* Upload Area */
-        .upload-area {
-            border: 2px dashed var(--border);
-            border-radius: var(--radius);
-            padding: 20px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.3s;
+        /* RIGHT PANEL */
+        #right-panel {
+            position: fixed;
+            top: 68px; right: 14px; bottom: 100px;
+            width: 268px;
+            z-index: 50;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
         }
-        .upload-area:hover { border-color: var(--accent); background: var(--accent-dim); }
-        .upload-area input { display: none; }
-        .upload-icon { font-size: 28px; margin-bottom: 8px; }
-        .upload-text { font-size: 12px; color: var(--text-dim); }
 
-        /* Key Moments */
-        .moment-row {
+        .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 6px 10px 12px; }
+        .report-item { background: rgba(0,0,0,0.35); border-radius: 8px; padding: 8px 10px; }
+        .report-item-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+        .report-item-val { font-size: 18px; font-weight: 800; margin-top: 2px; font-variant-numeric: tabular-nums; }
+
+        .top-obc-list { padding: 0 10px 10px; }
+        .obc-entry { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+        .obc-rank { font-size: 10px; color: var(--text-muted); min-width: 14px; }
+        .obc-pid { font-size: 12px; font-weight: 600; min-width: 38px; }
+        .obc-cls { font-size: 9px; color: var(--text-dim); text-transform: uppercase; }
+        .obc-score { font-size: 12px; font-weight: 700; margin-left: auto; font-variant-numeric: tabular-nums; }
+        .obc-bar-wrap { height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; margin: 1px 0 5px; }
+        .obc-bar-inner { height: 100%; border-radius: 2px; transition: width 0.4s; }
+
+        .moments-list { padding: 0 10px 10px; max-height: 120px; overflow-y: auto; }
+        .moment-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 11px; }
+        .moment-frame { color: var(--text-dim); font-variant-numeric: tabular-nums; min-width: 50px; }
+        .moment-xg { font-weight: 700; color: var(--danger); min-width: 52px; }
+        .moment-ply { color: var(--text); }
+
+        .log-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+        #event-log { flex: 1; overflow-y: auto; padding: 0 10px 8px; }
+        .log-entry { padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.02); font-size: 10px; color: var(--text-dim); }
+        .log-time { color: var(--accent); margin-right: 5px; font-variant-numeric: tabular-nums; }
+
+        /* BOTTOM BAR */
+        #bottom-bar {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: 88px;
+            z-index: 100;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 8px 0;
-            border-bottom: 1px solid var(--border);
-            font-size: 12px;
+            gap: 14px;
+            padding: 0 20px;
+            background: linear-gradient(0deg, rgba(4,4,14,0.97) 0%, rgba(4,4,14,0.6) 100%);
+            border-top: 1px solid var(--border);
+            backdrop-filter: blur(24px);
         }
-        .moment-frame { font-variant-numeric: tabular-nums; color: var(--text-dim); min-width: 55px; }
-        .moment-xg { font-weight: 700; color: var(--accent); min-width: 50px; }
-        .moment-player { color: var(--text); }
 
-        /* Report */
-        .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .report-item { padding: 10px; background: rgba(0,0,0,0.3); border-radius: 10px; }
-        .report-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
-        .report-value { font-size: 20px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+        .scrubber-wrap { flex: 1; }
+        .scrubber-track { height: 36px; background: rgba(255,255,255,0.04); border-radius: 8px; position: relative; overflow: hidden; cursor: pointer; border: 1px solid var(--border); }
+        .scrubber-fill { height: 100%; position: absolute; left: 0; top: 0; background: linear-gradient(90deg, rgba(0,232,123,0.15), rgba(0,232,123,0.08)); border-right: 2px solid var(--accent); transition: width 0.3s; }
+        .scrubber-markers { position: absolute; inset: 0; }
+        .scrubber-marker { position: absolute; top: 0; width: 2px; height: 100%; background: var(--danger); opacity: 0.7; }
+        .scrubber-times { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+        .scrubber-center { text-align: center; font-size: 9px; color: var(--text-muted); letter-spacing: 1px; }
 
-        /* Log */
-        .log-container { flex: 1; overflow-y: auto; font-size: 11px; }
-        .log-entry { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--text-dim); }
-        .log-time { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
+        .bottom-actions { display: flex; flex-direction: column; gap: 6px; min-width: 140px; }
+        .btn-primary { background: var(--accent); color: #000; border: none; padding: 9px 18px; border-radius: 9px; font-weight: 700; font-size: 12px; cursor: pointer; transition: all 0.2s; letter-spacing: 0.3px; }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px var(--accent-glow); }
+        .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--border); padding: 7px 12px; border-radius: 8px; font-size: 11px; cursor: pointer; transition: all 0.2s; }
+        .btn-ghost:hover { background: var(--glass-light); }
 
-        /* Frame Scrubber */
-        .scrubber { flex: 1; display: flex; flex-direction: column; gap: 8px; }
-        .scrubber-track { height: 40px; background: var(--surface); border-radius: 8px; position: relative; overflow: hidden; cursor: pointer; }
-        .scrubber-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent-dim)); position: absolute; left: 0; top: 0; }
-        .scrubber-markers { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        .scrubber-marker { position: absolute; top: 0; width: 2px; height: 100%; background: var(--accent); opacity: 0.6; }
-        .scrubber-info { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
-
-        .btn-primary {
-            background: var(--accent);
-            color: #000;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.2s;
+        /* CENTER idle hint */
+        #hud-idle {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+            transition: opacity 0.6s;
         }
-        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,232,123,0.3); }
+        #hud-idle.hidden { opacity: 0; }
+        .hud-idle-title { font-size: 10px; text-transform: uppercase; letter-spacing: 3px; color: rgba(255,255,255,0.15); margin-bottom: 6px; }
+        .hud-idle-sub { font-size: 12px; color: rgba(255,255,255,0.1); }
 
-        .btn-ghost {
-            background: transparent;
-            color: var(--text);
-            border: 1px solid var(--border);
-            padding: 8px 14px;
-            border-radius: 8px;
-            font-size: 11px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .btn-ghost:hover { background: var(--surface-hover); }
-
-        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
     </style>
 </head>
 <body>
-    <div id="app">
-        <!-- Top Bar -->
-        <div class="topbar">
-            <div class="logo">FOOT<span>AGENT</span></div>
-            <div class="topbar-stats">
-                <div class="topbar-stat">
-                    <div class="topbar-stat-label">Frame</div>
-                    <div class="topbar-stat-value" id="frame-val">0</div>
-                </div>
-                <div class="topbar-stat">
-                    <div class="topbar-stat-label">Players</div>
-                    <div class="topbar-stat-value" id="players-val">0</div>
-                </div>
-                <div class="topbar-stat">
-                    <div class="topbar-stat-label">xG</div>
-                    <div class="topbar-stat-value" id="xg-val" style="color: var(--accent)">0.000</div>
-                </div>
-                <div class="topbar-stat">
-                    <div class="topbar-stat-label">Max OBC</div>
-                    <div class="topbar-stat-value" id="obc-val" style="color: var(--accent)">0.000</div>
-                </div>
-                <div class="topbar-stat">
-                    <div class="topbar-stat-label">VRAM</div>
-                    <div class="topbar-stat-value" id="vram-val">0.0 GB</div>
-                </div>
-            </div>
-            <div class="topbar-right">
-                <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
-            </div>
-        </div>
 
-        <!-- Left Sidebar: Player List + Upload -->
-        <div class="sidebar-left">
-            <div class="card">
-                <div class="card-title">Upload Match</div>
-                <label class="upload-area" for="video-upload">
-                    <input type="file" id="video-upload" accept="video/*">
-                    <div class="upload-icon">+</div>
-                    <div class="upload-text">Drop video or click to browse</div>
-                </label>
-                <div id="upload-status" style="font-size: 11px; margin-top: 8px; text-align: center; color: var(--text-dim);"></div>
-            </div>
+    <!-- 3D CANVAS — fills full screen -->
+    <div id="pitch-canvas"></div>
 
-            <div class="card" style="flex: 1; display: flex; flex-direction: column;">
-                <div class="card-title">
-                    Players on Pitch
-                    <span class="badge" id="player-count-badge">0</span>
-                </div>
-                <div id="player-list" style="flex: 1; overflow-y: auto;"></div>
+    <!-- TOP BAR -->
+    <div id="topbar">
+        <div class="logo">FOOT<span>AGENT</span><sub>Research Pipeline v1.0 · GAT Spearman 0.793</sub></div>
+        <div class="topbar-metrics">
+            <div class="metric">
+                <span class="metric-label">Frame</span>
+                <span class="metric-value" id="frame-val">0</span>
             </div>
-
-            <div class="card">
-                <div class="card-title">Models Active</div>
-                <div id="models-list" style="font-size: 12px; color: var(--text-dim);">
-                    <div style="margin-bottom: 4px;">YOLO Football (4-class)</div>
-                    <div style="margin-bottom: 4px;">ByteTrack</div>
-                    <div style="margin-bottom: 4px;">Temporal GAT (OBC)</div>
-                    <div>Homography Calibrator</div>
-                </div>
+            <div class="metric">
+                <span class="metric-label">Players</span>
+                <span class="metric-value" id="players-val">0</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">xG</span>
+                <span class="metric-value green" id="xg-val">0.000</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">Max OBC</span>
+                <span class="metric-value green" id="obc-val">0.000</span>
+            </div>
+            <div class="metric">
+                <span class="metric-label">VRAM</span>
+                <span class="metric-value" id="vram-val">0.0 GB</span>
             </div>
         </div>
+        <div class="topbar-right">
+            <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
+        </div>
+    </div>
 
-        <!-- 3D Viewport -->
-        <div class="viewport">
-            <div id="threejs-canvas"></div>
+    <!-- LEFT PANEL -->
+    <div id="left-panel">
+        <div class="panel upload-card">
+            <div class="panel-title">Upload Match</div>
+            <label class="upload-zone" for="video-upload">
+                <input type="file" id="video-upload" accept="video/*">
+                <div class="upload-icon">+</div>
+                <div class="upload-text">Drop video or click to browse</div>
+            </label>
+            <div id="upload-status"></div>
         </div>
 
-        <!-- Right Sidebar: Report + Log -->
-        <div class="sidebar-right">
-            <div class="card">
-                <div class="card-title">Match Report</div>
-                <div class="report-grid">
-                    <div class="report-item">
-                        <div class="report-label">Duration</div>
-                        <div class="report-value" id="report-duration">--</div>
-                    </div>
-                    <div class="report-item">
-                        <div class="report-label">Key Moments</div>
-                        <div class="report-value" id="report-moments" style="color: var(--warn);">0</div>
-                    </div>
-                    <div class="report-item">
-                        <div class="report-label">Avg xG</div>
-                        <div class="report-value" id="report-avg-xg" style="color: var(--accent);">0.000</div>
-                    </div>
-                    <div class="report-item">
-                        <div class="report-label">Max xG</div>
-                        <div class="report-value" id="report-max-xg" style="color: var(--danger);">0.000</div>
-                    </div>
+        <div class="panel player-panel">
+            <div class="panel-title">
+                Players on Pitch
+                <span class="badge-sm" id="player-count-badge">0</span>
+            </div>
+            <div id="player-list"></div>
+        </div>
+
+        <div class="panel models-card">
+            <div class="panel-title">Models Active</div>
+            <div class="model-item"><div class="model-dot"></div>YOLO Football 4-class</div>
+            <div class="model-item"><div class="model-dot"></div>ByteTrack</div>
+            <div class="model-item"><div class="model-dot"></div>Temporal GAT (OBC)</div>
+            <div class="model-item"><div class="model-dot"></div>Homography Calibrator</div>
+        </div>
+    </div>
+
+    <!-- RIGHT PANEL -->
+    <div id="right-panel">
+        <div class="panel">
+            <div class="panel-title">Match Report</div>
+            <div class="report-grid">
+                <div class="report-item">
+                    <div class="report-item-label">Duration</div>
+                    <div class="report-item-val" id="report-duration">--</div>
                 </div>
-            </div>
-
-            <div class="card">
-                <div class="card-title">
-                    Top OBC Players
-                    <span class="badge">Ranked</span>
+                <div class="report-item">
+                    <div class="report-item-label">Key Moments</div>
+                    <div class="report-item-val" style="color:var(--warn)" id="report-moments">0</div>
                 </div>
-                <div id="top-obc-list"></div>
-            </div>
-
-            <div class="card">
-                <div class="card-title">Key Moments</div>
-                <div id="moments-list" style="max-height: 150px; overflow-y: auto;"></div>
-            </div>
-
-            <div class="card" style="flex: 1; display: flex; flex-direction: column;">
-                <div class="card-title">Event Log</div>
-                <div id="log" class="log-container">
-                    <div class="log-entry">System initialized. Awaiting video upload...</div>
+                <div class="report-item">
+                    <div class="report-item-label">Avg xG</div>
+                    <div class="report-item-val" style="color:var(--accent)" id="report-avg-xg">0.000</div>
+                </div>
+                <div class="report-item">
+                    <div class="report-item-label">Max xG</div>
+                    <div class="report-item-val" style="color:var(--danger)" id="report-max-xg">0.000</div>
                 </div>
             </div>
         </div>
 
-        <!-- Bottom Panel: Timeline -->
-        <div class="bottom-panel">
-            <div class="scrubber">
-                <div class="scrubber-track" id="scrubber-track">
-                    <div class="scrubber-fill" id="scrubber-fill" style="width: 0%;"></div>
-                    <div class="scrubber-markers" id="scrubber-markers"></div>
-                </div>
-                <div class="scrubber-info">
-                    <span id="scrub-current">00:00</span>
-                    <span>FootAgent Research Pipeline v1.0 | GAT Spearman: 0.793</span>
-                    <span id="scrub-total">00:00</span>
-                </div>
+        <div class="panel">
+            <div class="panel-title">Top OBC Players <span class="badge-sm">Ranked</span></div>
+            <div class="top-obc-list" id="top-obc-list">
+                <div style="font-size:10px;color:var(--text-muted);padding:6px 0;">Awaiting data...</div>
             </div>
-            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 140px;">
-                <button class="btn-primary" id="btn-process">Process Video</button>
-                <button class="btn-ghost" onclick="resetCamera()">Reset Camera</button>
+        </div>
+
+        <div class="panel">
+            <div class="panel-title">Key Moments</div>
+            <div class="moments-list" id="moments-list">
+                <div style="font-size:10px;color:var(--text-muted);padding:6px 0;">No high-xG moments yet</div>
             </div>
+        </div>
+
+        <div class="panel log-panel">
+            <div class="panel-title">Event Log</div>
+            <div id="event-log">
+                <div class="log-entry"><span class="log-time">[--:--:--]</span>System initialized. Awaiting video upload...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- IDLE HINT -->
+    <div id="hud-idle">
+        <div class="hud-idle-title">FootAgent 3D Intelligence</div>
+        <div class="hud-idle-sub">Upload a match video to begin analysis</div>
+    </div>
+
+    <!-- BOTTOM BAR -->
+    <div id="bottom-bar">
+        <div class="scrubber-wrap">
+            <div class="scrubber-track" id="scrubber-track">
+                <div class="scrubber-fill" id="scrubber-fill" style="width:0%"></div>
+                <div class="scrubber-markers" id="scrubber-markers"></div>
+            </div>
+            <div class="scrubber-times">
+                <span id="scrub-current">00:00</span>
+                <span class="scrubber-center">FOOTBALL INTELLIGENCE · TEMPORAL GAT · BYTETRACK · HOMOGRAPHY</span>
+                <span id="scrub-total">00:00</span>
+            </div>
+        </div>
+        <div class="bottom-actions">
+            <button class="btn-primary" id="btn-process">Process Video</button>
+            <button class="btn-ghost" onclick="resetCamera()">Reset Camera</button>
         </div>
     </div>
 
