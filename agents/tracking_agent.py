@@ -22,11 +22,11 @@ import time
 
 class ByteTrack:
     """
-    Simplified ByteTrack implementation for multi-object tracking.
-    Maintains player IDs across frames using IoU matching.
+    ByteTrack with ID recycling for football (max ~25 entities on pitch).
+    Recycles IDs from dead tracks so IDs stay in 1..max_players range.
     """
-    
-    def __init__(self, track_thresh=0.5, track_buffer=60, match_thresh=0.8,
+
+    def __init__(self, track_thresh=0.5, track_buffer=30, match_thresh=0.8,
                  max_players=30):
         self.track_thresh = track_thresh
         self.track_buffer = track_buffer
@@ -35,7 +35,23 @@ class ByteTrack:
 
         self.tracks = []
         self.lost_stracks = []
-        self.track_id_count = 0
+
+        # ID recycling pool: available IDs from 1..max_players
+        self._id_pool = list(range(max_players, 0, -1))  # stack, pop from end
+        self._next_overflow = max_players + 1
+
+    def _alloc_id(self):
+        """Get a recycled ID or allocate a new one."""
+        if self._id_pool:
+            return self._id_pool.pop()
+        tid = self._next_overflow
+        self._next_overflow += 1
+        return tid
+
+    def _free_id(self, tid):
+        """Return an ID to the pool for reuse (only if within max_players)."""
+        if tid <= self.max_players:
+            self._id_pool.append(tid)
 
     def update(self, detections):
         """
@@ -82,7 +98,7 @@ class ByteTrack:
             row_ind, col_ind = linear_sum_assignment(dists)
             recovered = set()
             for r, c in zip(row_ind, col_ind):
-                if dists[r, c] < self.match_thresh * 1.3:
+                if dists[r, c] < self.match_thresh * 1.5:
                     self.lost_stracks[r].update(remaining[c])
                     keep_tracks.append(self.lost_stracks[r])
                     matched_det_idx.add(unmatched[c])
@@ -90,16 +106,26 @@ class ByteTrack:
             self.lost_stracks = [t for i, t in enumerate(self.lost_stracks)
                                  if i not in recovered]
 
-        # Step 3: New tracks only for truly unmatched detections
+        # Step 3: New tracks from unmatched detections (with recycled IDs)
         still_unmatched = [i for i in range(len(dets_conf)) if i not in matched_det_idx]
+        active_count = len(keep_tracks)
         for i in still_unmatched:
-            if self.track_id_count < self.max_players * 20:
-                self.track_id_count += 1
-                keep_tracks.append(STrack(dets_conf[i], self.track_id_count))
+            if active_count >= self.max_players:
+                break  # Hard cap: never exceed max_players active tracks
+            tid = self._alloc_id()
+            keep_tracks.append(STrack(dets_conf[i], tid))
+            active_count += 1
 
         self.tracks = keep_tracks
-        self.lost_stracks = [t for t in self.lost_stracks
-                            if t.time_since_update < self.track_buffer]
+
+        # Expire lost tracks and recycle their IDs
+        surviving_lost = []
+        for t in self.lost_stracks:
+            if t.time_since_update < self.track_buffer:
+                surviving_lost.append(t)
+            else:
+                self._free_id(t.track_id)
+        self.lost_stracks = surviving_lost
 
         results = []
         for track in self.tracks:

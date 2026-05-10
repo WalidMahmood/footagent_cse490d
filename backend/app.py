@@ -77,7 +77,7 @@ def _run_pipeline(video_path: str, match_id: str):
         fb_path = str(Path('F:/footagent/weights/yolo-football-player-detection.pt'))
 
     detector = FootballDetector(weights_path=fb_path)
-    tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=60, max_players=30)
+    tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=20, max_players=25)
     team_cls = TeamClassifier(n_clusters=2)
     homography = HomographyCalibrator()
 
@@ -234,6 +234,7 @@ def _run_pipeline(video_path: str, match_id: str):
     cap.release()
     MATCH_STATUS["active"] = False
 
+    match_report.set_frame_count(processed)
     report = match_report.generate(fps)
     MATCH_REPORTS[match_id] = report
     memory["stats"] = report.get("summary", {})

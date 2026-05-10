@@ -152,10 +152,19 @@ class MatchReport:
         self.player_classes = {}
         self.player_teams = {}
         self.key_moments = []
+        self.total_frames_processed = 0
+        self.first_frame = None
+        self.last_frame = None
+
+    def set_frame_count(self, total):
+        self.total_frames_processed = total
 
     def update(self, frame_n, players, obc_scores, xg):
         self.frames.append(frame_n)
         self.xg_history.append(xg)
+        if self.first_frame is None:
+            self.first_frame = frame_n
+        self.last_frame = frame_n
 
         for p in players:
             pid = p['player_id']
@@ -175,10 +184,13 @@ class MatchReport:
             })
 
     def generate(self, fps=24.0):
+        actual_frames = self.total_frames_processed or (
+            (self.last_frame - self.first_frame + 1) if self.first_frame is not None else len(self.frames)
+        )
         report = {
             'summary': {
-                'total_frames': len(self.frames),
-                'duration_sec': round(len(self.frames) / fps, 1),
+                'total_frames': actual_frames,
+                'duration_sec': round(actual_frames / fps, 1),
                 'unique_players_tracked': len(self.player_appearances),
                 'avg_xg': round(np.mean(self.xg_history), 4) if self.xg_history else 0,
                 'max_xg': round(max(self.xg_history), 4) if self.xg_history else 0,
@@ -390,7 +402,7 @@ def run_demo(args):
         fb_yolo_path = str(Path('F:/footagent/weights/yolo-football-player-detection.pt'))
     detector = FootballDetector(weights_path=fb_yolo_path)
 
-    tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=60, max_players=30)
+    tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=20, max_players=25)
     team_cls = TeamClassifier(n_clusters=2)
     homography = HomographyCalibrator()
 
@@ -581,6 +593,7 @@ def run_demo(args):
     print(f"\nDone: {processed} frames in {elapsed:.1f}s ({processed/elapsed:.1f} fps)")
 
     if args.report or args.save:
+        match_report.set_frame_count(processed)
         report = match_report.generate(fps)
         report_path = (args.save or 'match') + '_report.json'
         with open(report_path, 'w') as f:
