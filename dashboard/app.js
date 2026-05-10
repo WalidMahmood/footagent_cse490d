@@ -148,6 +148,8 @@ async function fetchLatestMemory(matchId) {
     }
 }
 
+let lastReport = null;
+
 async function fetchReport(matchId) {
     try {
         const resp = await fetch(`${API_URL}/match/report/${matchId}`);
@@ -156,6 +158,7 @@ async function fetchReport(matchId) {
             return;
         }
         const report = await resp.json();
+        lastReport = report;
         console.log('[Report]', report);
 
         if (report.summary) {
@@ -167,10 +170,154 @@ async function fetchReport(matchId) {
         if (report.top_obc_players && report.top_obc_players.length) {
             renderTopOBC(report.top_obc_players.slice(0,5).map(p => [String(p.player_id), p.avg_obc, p.class]));
         }
+
+        // Show the "View Full Report" button
+        const btn = document.getElementById('btn-view-report');
+        if (btn) btn.style.display = 'inline-block';
+
         addLog("Match report loaded");
+
+        // Auto-show report modal on completion
+        showReport();
     } catch (err) {
         console.error('[Report] Fetch error:', err);
     }
+}
+
+function showReport() {
+    if (!lastReport) return;
+    const modal = document.getElementById('report-modal');
+    const body = document.getElementById('report-modal-body');
+    const r = lastReport;
+    const s = r.summary || {};
+
+    // Build the full report HTML
+    let html = '';
+
+    // Summary stats
+    html += `<div class="report-section">
+        <div class="report-section-title">Match Summary</div>
+        <div class="report-stats-grid">
+            <div class="report-stat-card">
+                <div class="report-stat-label">Duration</div>
+                <div class="report-stat-value">${s.duration_sec || 0}s</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Frames</div>
+                <div class="report-stat-value">${(s.total_frames || 0).toLocaleString()}</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Players Tracked</div>
+                <div class="report-stat-value" style="color:var(--accent)">${s.unique_players_tracked || 0}</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Key Moments</div>
+                <div class="report-stat-value" style="color:var(--warn)">${s.key_moments || 0}</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Avg xG</div>
+                <div class="report-stat-value" style="color:var(--accent)">${(s.avg_xg || 0).toFixed(4)}</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Max xG</div>
+                <div class="report-stat-value" style="color:var(--danger)">${(s.max_xg || 0).toFixed(4)}</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Team A</div>
+                <div class="report-stat-value" style="color:#ff4444">${(s.team_distribution && s.team_distribution['0']) || '?'}</div>
+            </div>
+            <div class="report-stat-card">
+                <div class="report-stat-label">Team B</div>
+                <div class="report-stat-value" style="color:#4488ff">${(s.team_distribution && s.team_distribution['1']) || '?'}</div>
+            </div>
+        </div>
+    </div>`;
+
+    // Top OBC Players table
+    if (r.top_obc_players && r.top_obc_players.length) {
+        html += `<div class="report-section">
+            <div class="report-section-title">Top Off-Ball Contributors</div>
+            <table class="report-player-table">
+                <thead><tr>
+                    <th>Rank</th><th>Player</th><th>Role</th><th>Team</th><th>Avg OBC</th><th>Max OBC</th><th>OBC Level</th><th>Appearances</th>
+                </tr></thead><tbody>`;
+
+        r.top_obc_players.forEach((p, i) => {
+            const teamColor = p.team === 0 ? '#ff4444' : (p.team === 1 ? '#4488ff' : '#888');
+            const teamLabel = p.team === 0 ? 'A' : (p.team === 1 ? 'B' : '?');
+            const role = p.class === 'goalkeeper' ? 'GK' : (p.class === 'referee' ? 'REF' : 'Player');
+            const barColor = p.avg_obc > 0.65 ? 'var(--accent)' : (p.avg_obc > 0.35 ? 'var(--warn)' : 'rgba(255,255,255,0.15)');
+            const barW = (p.avg_obc * 100).toFixed(0);
+
+            html += `<tr>
+                <td style="color:var(--text-dim)">${i+1}</td>
+                <td style="font-weight:700">#${p.player_id}</td>
+                <td style="color:var(--text-dim)">${role}</td>
+                <td><span style="color:${teamColor};font-weight:600">Team ${teamLabel}</span></td>
+                <td style="font-weight:700;color:${barColor === 'var(--accent)' ? '#00e87b' : (barColor === 'var(--warn)' ? '#ffb800' : '#888')}">${p.avg_obc.toFixed(3)}</td>
+                <td>${p.max_obc.toFixed(3)}</td>
+                <td><div class="obc-bar-cell"><div class="obc-bar-cell-fill" style="width:${barW}%;background:${barColor}"></div></div></td>
+                <td style="color:var(--text-dim)">${p.appearances}</td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div>`;
+    }
+
+    // Key Moments
+    if (r.key_moments && r.key_moments.length) {
+        html += `<div class="report-section">
+            <div class="report-section-title">Key Moments (High xG Events)</div>`;
+
+        // Group consecutive frames into events
+        const events = [];
+        let currentEvent = null;
+        r.key_moments.forEach(m => {
+            if (!currentEvent || m.frame - currentEvent.endFrame > 30) {
+                currentEvent = { startFrame: m.frame, endFrame: m.frame, maxXg: m.xg, count: 1 };
+                events.push(currentEvent);
+            } else {
+                currentEvent.endFrame = m.frame;
+                currentEvent.maxXg = Math.max(currentEvent.maxXg, m.xg);
+                currentEvent.count++;
+            }
+        });
+
+        events.slice(0, 15).forEach((ev, i) => {
+            const startSec = Math.round(ev.startFrame / 25);
+            const endSec = Math.round(ev.endFrame / 25);
+            const timeStr = startSec === endSec ? fmtTime(startSec) : `${fmtTime(startSec)} — ${fmtTime(endSec)}`;
+            html += `<div class="moment-card">
+                <div class="moment-card-frame">${timeStr}</div>
+                <div class="moment-card-xg">xG: ${ev.maxXg.toFixed(3)}</div>
+                <div class="moment-card-desc">High threat event · ${ev.count} frame${ev.count > 1 ? 's' : ''} · Frames ${ev.startFrame}–${ev.endFrame}</div>
+            </div>`;
+        });
+
+        html += `</div>`;
+    }
+
+    // Class distribution
+    if (s.class_distribution) {
+        html += `<div class="report-section">
+            <div class="report-section-title">Detection Classes</div>
+            <div style="display:flex;gap:16px;">`;
+        for (const [cls, count] of Object.entries(s.class_distribution)) {
+            const label = cls === 'goalkeeper' ? 'Goalkeepers' : (cls === 'referee' ? 'Referees' : 'Players');
+            html += `<div class="report-stat-card" style="flex:1">
+                <div class="report-stat-label">${label}</div>
+                <div class="report-stat-value">${count}</div>
+            </div>`;
+        }
+        html += `</div></div>`;
+    }
+
+    body.innerHTML = html;
+    modal.style.display = 'flex';
+}
+
+function closeReport() {
+    document.getElementById('report-modal').style.display = 'none';
 }
 
 // ── Render functions ────────────────────────────────────

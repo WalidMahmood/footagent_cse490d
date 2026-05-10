@@ -215,6 +215,78 @@
         .hud-idle-title { font-size: 10px; text-transform: uppercase; letter-spacing: 3px; color: rgba(255,255,255,0.15); margin-bottom: 6px; }
         .hud-idle-sub { font-size: 12px; color: rgba(255,255,255,0.1); }
 
+        /* REPORT MODAL */
+        .modal-overlay {
+            position: fixed; inset: 0; z-index: 500;
+            background: rgba(0,0,0,0.75);
+            backdrop-filter: blur(12px);
+            display: flex; align-items: center; justify-content: center;
+            animation: fadeIn 0.3s;
+        }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .modal-content {
+            background: rgba(8,8,20,0.97);
+            border: 1px solid var(--border-accent);
+            border-radius: 18px;
+            width: 720px; max-width: 90vw; max-height: 85vh;
+            overflow-y: auto;
+            box-shadow: 0 0 60px rgba(0,232,123,0.08);
+        }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 20px 24px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+        .modal-header h2 { font-size: 18px; font-weight: 800; letter-spacing: 0.5px; }
+        .modal-close {
+            background: none; border: none; color: var(--text-dim); font-size: 24px;
+            cursor: pointer; padding: 4px 8px; border-radius: 6px;
+        }
+        .modal-close:hover { background: rgba(255,255,255,0.08); color: #fff; }
+        .modal-body { padding: 20px 24px 28px; }
+
+        .report-section { margin-bottom: 24px; }
+        .report-section-title {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+            color: var(--accent); margin-bottom: 12px; font-weight: 700;
+        }
+        .report-stats-grid {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;
+        }
+        .report-stat-card {
+            background: rgba(255,255,255,0.03); border: 1px solid var(--border);
+            border-radius: 10px; padding: 12px; text-align: center;
+        }
+        .report-stat-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+        .report-stat-value { font-size: 22px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+        .report-player-table { width: 100%; border-collapse: collapse; }
+        .report-player-table th {
+            font-size: 9px; text-transform: uppercase; letter-spacing: 1.5px;
+            color: var(--text-dim); text-align: left; padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+        }
+        .report-player-table td {
+            font-size: 13px; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.03);
+            font-variant-numeric: tabular-nums;
+        }
+        .report-player-table tr:hover td { background: rgba(255,255,255,0.02); }
+        .obc-bar-cell {
+            position: relative; width: 100px; height: 6px;
+            background: rgba(255,255,255,0.06); border-radius: 3px; display: inline-block; vertical-align: middle;
+        }
+        .obc-bar-cell-fill { height: 100%; border-radius: 3px; }
+
+        .moment-card {
+            display: flex; align-items: center; gap: 14px;
+            padding: 10px 12px; margin-bottom: 6px;
+            background: rgba(255,255,255,0.02); border-radius: 8px;
+            border-left: 3px solid var(--danger);
+        }
+        .moment-card-frame { font-size: 11px; color: var(--text-dim); min-width: 70px; font-variant-numeric: tabular-nums; }
+        .moment-card-xg { font-size: 14px; font-weight: 700; color: var(--danger); min-width: 80px; }
+        .moment-card-desc { font-size: 11px; color: var(--text); }
+
         ::-webkit-scrollbar { width: 3px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
@@ -291,7 +363,7 @@
     <!-- RIGHT PANEL -->
     <div id="right-panel">
         <div class="panel">
-            <div class="panel-title">Match Report</div>
+            <div class="panel-title">Match Report <button class="badge-sm" id="btn-view-report" onclick="showReport()" style="cursor:pointer;border:none;display:none;">View Full Report</button></div>
             <div class="report-grid">
                 <div class="report-item">
                     <div class="report-item-label">Duration</div>
@@ -338,6 +410,19 @@
     <div id="hud-idle">
         <div class="hud-idle-title">FootAgent 3D Intelligence</div>
         <div class="hud-idle-sub">Upload a match video to begin analysis</div>
+    </div>
+
+    <!-- REPORT MODAL -->
+    <div id="report-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Match Analysis Report</h2>
+                <button class="modal-close" onclick="closeReport()">&times;</button>
+            </div>
+            <div class="modal-body" id="report-modal-body">
+                <!-- Filled by JS -->
+            </div>
+        </div>
     </div>
 
     <!-- BOTTOM BAR -->
