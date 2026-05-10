@@ -41,16 +41,24 @@ class ByteTrack:
         self._next_overflow = max_players + 1
 
     def _alloc_id(self):
-        """Get a recycled ID or allocate a new one."""
+        """Get a recycled ID, force-reclaim from oldest lost track, or overflow."""
         if self._id_pool:
             return self._id_pool.pop()
+        # Pool empty — force-expire oldest lost track to reclaim its ID
+        if self.lost_stracks:
+            # Sort by longest time since update (oldest first)
+            self.lost_stracks.sort(key=lambda t: t.time_since_update, reverse=True)
+            oldest = self.lost_stracks.pop(0)
+            return oldest.track_id  # Reuse this ID directly
+        # Absolute last resort (shouldn't happen in football)
         tid = self._next_overflow
         self._next_overflow += 1
         return tid
 
     def _free_id(self, tid):
-        """Return an ID to the pool for reuse (only if within max_players)."""
-        if tid <= self.max_players:
+        """Return an ID to the pool for reuse."""
+        # Accept ALL IDs back, not just <= max_players
+        if tid not in self._id_pool:
             self._id_pool.append(tid)
 
     def update(self, detections):
