@@ -31,7 +31,10 @@ class ModelLoader:
             print(f"[ModelLoader] Loading Temporal GAT from {checkpoint_path}...")
             model = TemporalGAT(in_channels=5, hidden=64, out_channels=32)
             checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
-            model.load_state_dict(checkpoint["model_state_dict"])
+            if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+                model.load_state_dict(checkpoint["model_state_dict"])
+            else:
+                model.load_state_dict(checkpoint)
             model.to(self.device)
             model.eval()
             self.models["gat"] = model

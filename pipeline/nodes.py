@@ -86,7 +86,7 @@ class PipelineNodes:
             
         print(f"--- [Node] Off-Ball Analysis (GAT) - {len(player_list)} players ---")
         self.scheduler.check_and_optimize("gat")
-        gat_model = self.loader.load_gat("checkpoints/gat/temporal_gat_20260506_152134/best_model.pt")
+        gat_model = self.loader.load_gat("weights/gat_temporal.pt")
         
         # 1. Prepare Node Features: [x, y, teammate, actor, keeper]
         nodes = []
@@ -106,7 +106,7 @@ class PipelineNodes:
             for j, p2 in enumerate(player_list):
                 if i == j: continue
                 dist = np.sqrt((p1["pitch_x"] - p2["pitch_x"])**2 + (p1["pitch_y"] - p2["pitch_y"])**2)
-                if dist < 40.0: # Increased threshold for better connectivity in scattered scenes
+                if dist <= 17.5: # Must match training threshold (EDA-derived, 17.5m)
                     edge_index.append([i, j])
         
         if not edge_index:

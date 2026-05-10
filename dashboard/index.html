@@ -4,117 +4,352 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FootAgent | 3D Intelligence Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
     <style>
         :root {
-            --bg: #050505;
-            --glass: rgba(255, 255, 255, 0.05);
-            --accent: #00ff88;
-            --accent-glow: rgba(0, 255, 136, 0.3);
-            --text: #ffffff;
+            --bg: #0a0a0f;
+            --surface: rgba(255,255,255,0.03);
+            --surface-hover: rgba(255,255,255,0.06);
+            --border: rgba(255,255,255,0.08);
+            --accent: #00e87b;
+            --accent-dim: rgba(0,232,123,0.15);
+            --danger: #ff3b5c;
+            --warn: #ffb800;
+            --text: #e8e8e8;
+            --text-dim: rgba(255,255,255,0.45);
+            --text-muted: rgba(255,255,255,0.25);
+            --radius: 16px;
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif; }
-        body { background: var(--bg); color: var(--text); overflow: hidden; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow: hidden; }
 
-        #container { width: 100vw; height: 100vh; position: relative; }
-        
-        /* Glassmorphism Sidebar */
-        .sidebar {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            width: 320px;
-            height: calc(100vh - 40px);
-            background: var(--glass);
+        #app { width: 100vw; height: 100vh; display: grid; grid-template-columns: 340px 1fr 320px; grid-template-rows: 60px 1fr 220px; }
+
+        /* Top Bar */
+        .topbar {
+            grid-column: 1 / -1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 1px solid var(--border);
+            background: rgba(10,10,15,0.9);
             backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 24px;
-            padding: 24px;
+            z-index: 20;
+        }
+        .logo { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+        .logo span { color: var(--accent); }
+        .topbar-stats { display: flex; gap: 28px; }
+        .topbar-stat { text-align: center; }
+        .topbar-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-dim); }
+        .topbar-stat-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .topbar-right { display: flex; align-items: center; gap: 12px; }
+        .status-badge { padding: 4px 14px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }
+        .status-offline { background: rgba(255,255,255,0.06); color: var(--text-dim); }
+        .status-live { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,232,123,0.3); animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.7; } }
+
+        /* Left Sidebar */
+        .sidebar-left {
+            grid-row: 2 / 4;
+            border-right: 1px solid var(--border);
+            padding: 16px;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 20px;
-            z-index: 10;
+            gap: 12px;
+            background: rgba(10,10,15,0.6);
         }
 
-        .header h1 { font-size: 24px; font-weight: 800; letter-spacing: -1px; background: linear-gradient(90deg, #fff, #00ff88); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .header p { font-size: 12px; opacity: 0.5; text-transform: uppercase; letter-spacing: 2px; }
+        /* 3D Viewport */
+        .viewport {
+            position: relative;
+            overflow: hidden;
+        }
+        #threejs-canvas { width: 100%; height: 100%; }
 
-        .panel { background: rgba(0,0,0,0.3); padding: 16px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); }
-        .panel-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between; }
-        
-        .stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
-        .stat-value { color: var(--accent); font-weight: 600; }
+        /* Right Sidebar */
+        .sidebar-right {
+            grid-row: 2 / 4;
+            border-left: 1px solid var(--border);
+            padding: 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            background: rgba(10,10,15,0.6);
+        }
 
-        .upload-btn {
+        /* Bottom Panel */
+        .bottom-panel {
+            border-top: 1px solid var(--border);
+            padding: 16px 20px;
+            display: flex;
+            gap: 16px;
+            background: rgba(10,10,15,0.8);
+            backdrop-filter: blur(10px);
+        }
+
+        /* Cards */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+        .card-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .card-title .badge {
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 8px;
+            background: var(--accent-dim);
+            color: var(--accent);
+            text-transform: none;
+            letter-spacing: 0;
+        }
+
+        /* Player List */
+        .player-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 10px;
+            margin-bottom: 4px;
+            transition: background 0.2s;
+            cursor: pointer;
+        }
+        .player-row:hover { background: var(--surface-hover); }
+        .player-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .player-id { font-size: 13px; font-weight: 600; min-width: 45px; }
+        .player-class { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.5px; min-width: 30px; }
+        .player-obc { font-size: 13px; font-weight: 700; margin-left: auto; font-variant-numeric: tabular-nums; }
+        .obc-high { color: var(--accent); }
+        .obc-mid { color: var(--warn); }
+        .obc-low { color: var(--text-dim); }
+
+        /* OBC Bar */
+        .obc-bar-container { height: 4px; background: rgba(255,255,255,0.05); border-radius: 2px; margin-top: 4px; }
+        .obc-bar { height: 100%; border-radius: 2px; transition: width 0.3s; }
+
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .upload-area:hover { border-color: var(--accent); background: var(--accent-dim); }
+        .upload-area input { display: none; }
+        .upload-icon { font-size: 28px; margin-bottom: 8px; }
+        .upload-text { font-size: 12px; color: var(--text-dim); }
+
+        /* Key Moments */
+        .moment-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 12px;
+        }
+        .moment-frame { font-variant-numeric: tabular-nums; color: var(--text-dim); min-width: 55px; }
+        .moment-xg { font-weight: 700; color: var(--accent); min-width: 50px; }
+        .moment-player { color: var(--text); }
+
+        /* Report */
+        .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .report-item { padding: 10px; background: rgba(0,0,0,0.3); border-radius: 10px; }
+        .report-label { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; }
+        .report-value { font-size: 20px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+        /* Log */
+        .log-container { flex: 1; overflow-y: auto; font-size: 11px; }
+        .log-entry { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.03); color: var(--text-dim); }
+        .log-time { color: var(--accent); margin-right: 6px; font-variant-numeric: tabular-nums; }
+
+        /* Frame Scrubber */
+        .scrubber { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+        .scrubber-track { height: 40px; background: var(--surface); border-radius: 8px; position: relative; overflow: hidden; cursor: pointer; }
+        .scrubber-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent-dim)); position: absolute; left: 0; top: 0; }
+        .scrubber-markers { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .scrubber-marker { position: absolute; top: 0; width: 2px; height: 100%; background: var(--accent); opacity: 0.6; }
+        .scrubber-info { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
+
+        .btn-primary {
             background: var(--accent);
             color: #000;
             border: none;
-            padding: 14px;
-            border-radius: 12px;
+            padding: 10px 20px;
+            border-radius: 10px;
             font-weight: 600;
+            font-size: 12px;
             cursor: pointer;
-            transition: all 0.3s;
-            text-align: center;
-            text-decoration: none;
-            display: block;
+            transition: all 0.2s;
         }
-        .upload-btn:hover { transform: translateY(-2px); box-shadow: 0 10px 20px var(--accent-glow); }
+        .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,232,123,0.3); }
 
-        #threejs-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-ghost:hover { background: var(--surface-hover); }
 
-        .log-container { flex: 1; overflow-y: auto; font-size: 11px; color: rgba(255,255,255,0.7); }
-        .log-entry { margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-        .log-time { color: var(--accent); margin-right: 6px; }
-
-        /* Status Pill */
-        .status-pill { padding: 4px 12px; border-radius: 20px; font-size: 10px; background: rgba(255,255,255,0.1); }
-        .status-active { background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent); }
-
-        /* Controls */
-        .controls { position: absolute; bottom: 20px; right: 20px; display: flex; gap: 10px; z-index: 10; }
-        .ctrl-btn { background: var(--glass); backdrop-filter: blur(10px); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 12px; border-radius: 50%; cursor: pointer; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
     </style>
 </head>
 <body>
-    <div id="container">
-        <div id="threejs-canvas"></div>
+    <div id="app">
+        <!-- Top Bar -->
+        <div class="topbar">
+            <div class="logo">FOOT<span>AGENT</span></div>
+            <div class="topbar-stats">
+                <div class="topbar-stat">
+                    <div class="topbar-stat-label">Frame</div>
+                    <div class="topbar-stat-value" id="frame-val">0</div>
+                </div>
+                <div class="topbar-stat">
+                    <div class="topbar-stat-label">Players</div>
+                    <div class="topbar-stat-value" id="players-val">0</div>
+                </div>
+                <div class="topbar-stat">
+                    <div class="topbar-stat-label">xG</div>
+                    <div class="topbar-stat-value" id="xg-val" style="color: var(--accent)">0.000</div>
+                </div>
+                <div class="topbar-stat">
+                    <div class="topbar-stat-label">Max OBC</div>
+                    <div class="topbar-stat-value" id="obc-val" style="color: var(--accent)">0.000</div>
+                </div>
+                <div class="topbar-stat">
+                    <div class="topbar-stat-label">VRAM</div>
+                    <div class="topbar-stat-value" id="vram-val">0.0 GB</div>
+                </div>
+            </div>
+            <div class="topbar-right">
+                <span id="status-badge" class="status-badge status-offline">OFFLINE</span>
+            </div>
+        </div>
 
-        <div class="sidebar">
-            <div class="header">
-                <h1>FOOTAGENT <span style="font-weight: 300;">3D</span></h1>
-                <p>Advanced Match Intelligence</p>
+        <!-- Left Sidebar: Player List + Upload -->
+        <div class="sidebar-left">
+            <div class="card">
+                <div class="card-title">Upload Match</div>
+                <label class="upload-area" for="video-upload">
+                    <input type="file" id="video-upload" accept="video/*">
+                    <div class="upload-icon">+</div>
+                    <div class="upload-text">Drop video or click to browse</div>
+                </label>
+                <div id="upload-status" style="font-size: 11px; margin-top: 8px; text-align: center; color: var(--text-dim);"></div>
             </div>
 
-            <div class="panel">
-                <div class="panel-title">System Status <span id="status-pill" class="status-pill">OFFLINE</span></div>
-                <div class="stat-row"><span>VRAM Usage</span><span class="stat-value" id="vram-val">0.0 GB</span></div>
-                <div class="stat-row"><span>OBC Score</span><span class="stat-value" id="obc-val">0.0000</span></div>
-                <div class="stat-row"><span>Threat Level</span><span class="stat-value" id="threat-val">LOW</span></div>
-                <div class="stat-row"><span>Active Models</span><span class="stat-value" id="models-val">None</span></div>
-                <div class="stat-row"><span>Frame Index</span><span class="stat-value" id="frame-val">0</span></div>
+            <div class="card" style="flex: 1; display: flex; flex-direction: column;">
+                <div class="card-title">
+                    Players on Pitch
+                    <span class="badge" id="player-count-badge">0</span>
+                </div>
+                <div id="player-list" style="flex: 1; overflow-y: auto;"></div>
             </div>
 
-            <div class="panel">
-                <div class="panel-title">Upload Match</div>
-                <input type="file" id="video-upload" style="display: none;" accept="video/*">
-                <label for="video-upload" class="upload-btn">CHOOSE VIDEO</label>
-                <div id="upload-status" style="font-size: 11px; margin-top: 10px; text-align: center; opacity: 0.7;"></div>
-            </div>
-
-            <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
-                <div class="panel-title">Incident Log</div>
-                <div id="log" class="log-container">
-                    <div class="log-entry">Waiting for pipeline initialization...</div>
+            <div class="card">
+                <div class="card-title">Models Active</div>
+                <div id="models-list" style="font-size: 12px; color: var(--text-dim);">
+                    <div style="margin-bottom: 4px;">YOLO Football (4-class)</div>
+                    <div style="margin-bottom: 4px;">ByteTrack</div>
+                    <div style="margin-bottom: 4px;">Temporal GAT (OBC)</div>
+                    <div>Homography Calibrator</div>
                 </div>
             </div>
         </div>
 
-        <div class="controls">
-            <button class="ctrl-btn" onclick="resetCamera()">🔄</button>
-            <button class="ctrl-btn" onclick="toggleWireframe()">🕸️</button>
+        <!-- 3D Viewport -->
+        <div class="viewport">
+            <div id="threejs-canvas"></div>
+        </div>
+
+        <!-- Right Sidebar: Report + Log -->
+        <div class="sidebar-right">
+            <div class="card">
+                <div class="card-title">Match Report</div>
+                <div class="report-grid">
+                    <div class="report-item">
+                        <div class="report-label">Duration</div>
+                        <div class="report-value" id="report-duration">--</div>
+                    </div>
+                    <div class="report-item">
+                        <div class="report-label">Key Moments</div>
+                        <div class="report-value" id="report-moments" style="color: var(--warn);">0</div>
+                    </div>
+                    <div class="report-item">
+                        <div class="report-label">Avg xG</div>
+                        <div class="report-value" id="report-avg-xg" style="color: var(--accent);">0.000</div>
+                    </div>
+                    <div class="report-item">
+                        <div class="report-label">Max xG</div>
+                        <div class="report-value" id="report-max-xg" style="color: var(--danger);">0.000</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">
+                    Top OBC Players
+                    <span class="badge">Ranked</span>
+                </div>
+                <div id="top-obc-list"></div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Key Moments</div>
+                <div id="moments-list" style="max-height: 150px; overflow-y: auto;"></div>
+            </div>
+
+            <div class="card" style="flex: 1; display: flex; flex-direction: column;">
+                <div class="card-title">Event Log</div>
+                <div id="log" class="log-container">
+                    <div class="log-entry">System initialized. Awaiting video upload...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Panel: Timeline -->
+        <div class="bottom-panel">
+            <div class="scrubber">
+                <div class="scrubber-track" id="scrubber-track">
+                    <div class="scrubber-fill" id="scrubber-fill" style="width: 0%;"></div>
+                    <div class="scrubber-markers" id="scrubber-markers"></div>
+                </div>
+                <div class="scrubber-info">
+                    <span id="scrub-current">00:00</span>
+                    <span>FootAgent Research Pipeline v1.0 | GAT Spearman: 0.793</span>
+                    <span id="scrub-total">00:00</span>
+                </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px; min-width: 140px;">
+                <button class="btn-primary" id="btn-process">Process Video</button>
+                <button class="btn-ghost" onclick="resetCamera()">Reset Camera</button>
+            </div>
         </div>
     </div>
 

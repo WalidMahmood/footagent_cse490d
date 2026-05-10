@@ -26,94 +26,86 @@ class ByteTrack:
     Maintains player IDs across frames using IoU matching.
     """
     
-    def __init__(self, track_thresh=0.5, track_buffer=30, match_thresh=0.8):
+    def __init__(self, track_thresh=0.5, track_buffer=60, match_thresh=0.8,
+                 max_players=30):
         self.track_thresh = track_thresh
         self.track_buffer = track_buffer
         self.match_thresh = match_thresh
-        
-        self.tracks = []  # Active tracks
-        self.lost_stracks = []  # Temporarily lost tracks
-        self.removed_stracks = []  # Removed tracks
+        self.max_players = max_players
+
+        self.tracks = []
+        self.lost_stracks = []
         self.track_id_count = 0
-        
+
     def update(self, detections):
         """
         Update tracks with new detections.
         detections: list of (x1, y1, x2, y2, confidence) tuples
         Returns: list of (x1, y1, x2, y2, track_id, confidence) tuples
         """
-        # Step 1: Separate high-confidence detections
         dets_conf = [d for d in detections if d[4] >= self.track_thresh]
-        dets_low = [d for d in detections if d[4] < self.track_thresh]
-        
-        # Step 2: Predict current tracks
+
         for track in self.tracks:
             track.predict()
-        
-        # Step 3: Match high-confidence detections with active tracks
+        for track in self.lost_stracks:
+            track.time_since_update += 1
+
+        # Step 1: Match detections with active tracks (IoU)
+        matched_det_idx = set()
+        keep_tracks = []
+
         if len(self.tracks) > 0 and len(dets_conf) > 0:
             dists = self._iou_distance(self.tracks, dets_conf)
             row_ind, col_ind = linear_sum_assignment(dists)
-            
-            # Filter matches by threshold
-            matched_indices = []
+            matched_rows = set()
             for r, c in zip(row_ind, col_ind):
                 if dists[r, c] < self.match_thresh:
-                    matched_indices.append((r, c))
-            
-            matches = np.array(matched_indices) if matched_indices else np.empty((0, 2), dtype=int)
-            u_tracks = [i for i in range(len(self.tracks)) if i not in (matches[:, 0] if len(matches) > 0 else [])]
-            u_dets = [i for i in range(len(dets_conf)) if i not in (matches[:, 1] if len(matches) > 0 else [])]
-            
-            matched_tracks = [self.tracks[i] for i in (matches[:, 0] if len(matches) > 0 else [])]
-            matched_dets = [dets_conf[i] for i in (matches[:, 1] if len(matches) > 0 else [])]
-            
-            # Update matched tracks
-            for track, det in zip(matched_tracks, matched_dets):
-                track.update(det)
+                    self.tracks[r].update(dets_conf[c])
+                    keep_tracks.append(self.tracks[r])
+                    matched_det_idx.add(c)
+                    matched_rows.add(r)
+            for i, t in enumerate(self.tracks):
+                if i not in matched_rows:
+                    t.mark_lost()
+                    self.lost_stracks.append(t)
         else:
-            u_tracks = list(range(len(self.tracks)))
-            u_dets = list(range(len(dets_conf)))
-        
-        # Step 4: Handle unmatched tracks
-        for i in u_tracks:
-            track = self.tracks[i]
-            track.mark_lost()
-            self.lost_stracks.append(track)
-        
-        # Step 5: Initialize new tracks from unmatched detections
-        new_tracks = []
-        for i in u_dets:
-            det = dets_conf[i]
-            self.track_id_count += 1
-            new_track = STrack(det, self.track_id_count)
-            new_tracks.append(new_track)
-        
-        # Step 6: Try to match lost tracks with remaining detections
-        if len(u_dets) > 0 and len(self.lost_stracks) > 0:
-            remaining_dets = [dets_conf[i] for i in u_dets]
-            dists = self._iou_distance(self.lost_stracks, remaining_dets)
+            for t in self.tracks:
+                t.mark_lost()
+                self.lost_stracks.append(t)
+
+        # Step 2: Match remaining detections with lost tracks
+        unmatched = [i for i in range(len(dets_conf)) if i not in matched_det_idx]
+
+        if unmatched and self.lost_stracks:
+            remaining = [dets_conf[i] for i in unmatched]
+            dists = self._iou_distance(self.lost_stracks, remaining)
             row_ind, col_ind = linear_sum_assignment(dists)
-            
+            recovered = set()
             for r, c in zip(row_ind, col_ind):
-                if dists[r, c] < self.match_thresh:
-                    self.lost_stracks[r].update(remaining_dets[c])
-                    new_tracks.append(self.lost_stracks[r])
-        
-        # Step 7: Clean up
-        self.tracks = [t for t in self.tracks if not t.is_removed()]
-        self.tracks.extend(new_tracks)
-        
-        # Remove tracks that have been lost too long
-        self.lost_stracks = [t for t in self.lost_stracks 
+                if dists[r, c] < self.match_thresh * 1.3:
+                    self.lost_stracks[r].update(remaining[c])
+                    keep_tracks.append(self.lost_stracks[r])
+                    matched_det_idx.add(unmatched[c])
+                    recovered.add(r)
+            self.lost_stracks = [t for i, t in enumerate(self.lost_stracks)
+                                 if i not in recovered]
+
+        # Step 3: New tracks only for truly unmatched detections
+        still_unmatched = [i for i in range(len(dets_conf)) if i not in matched_det_idx]
+        for i in still_unmatched:
+            if self.track_id_count < self.max_players * 20:
+                self.track_id_count += 1
+                keep_tracks.append(STrack(dets_conf[i], self.track_id_count))
+
+        self.tracks = keep_tracks
+        self.lost_stracks = [t for t in self.lost_stracks
                             if t.time_since_update < self.track_buffer]
-        
-        # Return active tracks
+
         results = []
         for track in self.tracks:
             if track.is_confirmed():
                 results.append(tuple(track.to_tlbr()) + (track.track_id, track.confidence))
-        
+
         return results
     
     def _iou_distance(self, tracks, detections):

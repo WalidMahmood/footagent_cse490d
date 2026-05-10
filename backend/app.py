@@ -1,19 +1,31 @@
-from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+"""
+FootAgent Backend — serves the 3D dashboard and runs the pipeline.
+
+Endpoints:
+  POST /upload           — upload a video file
+  POST /match/start      — start processing a video
+  GET  /match/status      — poll current processing state
+  GET  /match/memory/{id} — get accumulated match data (frames, incidents, stats)
+  GET  /match/report/{id} — get final match report JSON
+"""
+import json
 import os
 import shutil
-import cv2
 import threading
-from typing import Optional
-from pipeline.graph import create_footagent_graph
-from pipeline.nodes import PipelineNodes
-from pipeline.model_loaders import ModelLoader
-from pipeline.vram_scheduler import VRAMScheduler
+import time
+from collections import defaultdict
+from pathlib import Path
+
+import cv2
+import numpy as np
+import torch
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 app = FastAPI(title="FootAgent API")
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,113 +33,269 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files for dashboard
-os.makedirs("dashboard", exist_ok=True)
-app.mount("/dashboard", StaticFiles(directory="dashboard", html=True), name="dashboard")
+MATCH_STATUS = {
+    "active": False,
+    "frame_idx": 0,
+    "match_id": None,
+    "total_frames": 0,
+    "fps": 0,
+    "players_count": 0,
+    "xg": 0.0,
+    "max_obc": 0.0,
+}
 
-# Shared state
-MATCH_STATUS = {"active": False, "frame_idx": 0, "match_id": None}
-PIPELINE = None
+MATCH_MEMORY = {}
+MATCH_REPORTS = {}
 
-def init_pipeline():
-    global PIPELINE
-    loader = ModelLoader()
-    scheduler = VRAMScheduler(loader)
-    nodes = PipelineNodes(loader, scheduler)
-    PIPELINE = create_footagent_graph(nodes)
+_pipeline_lock = threading.Lock()
 
-def run_pipeline_thread(video_path: str, match_id: str):
+
+def _run_pipeline(video_path: str, match_id: str):
     global MATCH_STATUS
-    print(f"[Backend] Starting pipeline thread for match: {match_id}")
+
+    try:
+        from main import FootballDetector, OffBallAgent, MatchReport
+        from agents.tracking_agent import ByteTrack, TeamClassifier, HomographyCalibrator
+    except ImportError as e:
+        print(f"[Backend] Import error: {e}")
+        MATCH_STATUS["active"] = False
+        return
+
     MATCH_STATUS["active"] = True
     MATCH_STATUS["match_id"] = match_id
-    
-    try:
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print(f"[Backend] ERROR: Could not open video: {video_path}")
-            MATCH_STATUS["active"] = False
-            return
+    MATCH_STATUS["frame_idx"] = 0
 
-        frame_idx = 0
-        fps = cap.get(cv2.CAP_PROP_FPS) or 25
-        print(f"[Backend] Video opened: {video_path} at {fps} FPS")
-        
-        while cap.isOpened() and MATCH_STATUS["active"]:
-            ret, frame = cap.read()
-            if not ret:
-                print("[Backend] End of video reached.")
-                break
-                
-            # Run LangGraph pipeline
-            state = {
-                "frame_idx": frame_idx,
-                "timestamp": frame_idx / fps,
-                "raw_frame": frame,
-                "match_id": match_id,
-                "players": [],
-                "is_incident": False,
-                "event_type": "normal",
-                "foul_analysis": None,
-                "off_ball_metrics": None,
-                "vram_usage": 0.0,
-                "active_models": [],
-                "match_memory_path": f"data/matches/{match_id}_memory.json"
-            }
-            
-            # Invoke graph
-            if PIPELINE:
-                PIPELINE.invoke(state)
-            
-            MATCH_STATUS["frame_idx"] = frame_idx
-            if frame_idx % 10 == 0:
-                print(f"[Backend] Processed frame {frame_idx}")
-            frame_idx += 1
-            
-        cap.release()
-    except Exception as e:
-        print(f"[Backend] CRITICAL ERROR in pipeline: {str(e)}")
-        import traceback
-        traceback.print_exc()
-    finally:
+    memory = {"frames": [], "incidents": [], "stats": {}}
+    MATCH_MEMORY[match_id] = memory
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"[Backend] Device: {device}")
+
+    weights_dir = Path(__file__).parent.parent / 'weights'
+    fb_path = str(weights_dir / 'yolo-football-player-detection.pt')
+    if not Path(fb_path).exists():
+        fb_path = str(Path('F:/footagent/weights/yolo-football-player-detection.pt'))
+
+    detector = FootballDetector(weights_path=fb_path)
+    tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=60, max_players=30)
+    team_cls = TeamClassifier(n_clusters=2)
+    homography = HomographyCalibrator()
+
+    gat_path = str(weights_dir / 'gat_temporal.pt')
+    if not Path(gat_path).exists():
+        gat_path = str(Path('F:/footagent/weights/gat_temporal.pt'))
+    obc_agent = OffBallAgent(weights_path=gat_path, device=device)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"[Backend] Cannot open video: {video_path}")
         MATCH_STATUS["active"] = False
-        print(f"[Backend] Pipeline thread finished for match: {match_id}")
+        return
 
-@app.on_event("startup")
-async def startup_event():
-    init_pipeline()
+    fps = cap.get(cv2.CAP_PROP_FPS) or 24
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    MATCH_STATUS["fps"] = fps
+    MATCH_STATUS["total_frames"] = total_frames
+
+    ret, first_frame = cap.read()
+    if ret:
+        homography.auto_calibrate(first_frame.shape)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    obc_scores = {}
+    xg_val = 0.0
+    team_assignments = {}
+    player_history = {}
+    match_report = MatchReport()
+    processed = 0
+    obc_interval = 15
+    start_frame = 90
+
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    print(f"[Backend] Processing {video_path} ({total_frames} frames @ {fps:.0f}fps)")
+
+    while cap.isOpened() and MATCH_STATUS["active"]:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        frame_n = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+        timestamp = frame_n / fps
+
+        raw_dets = detector.detect(frame, conf=0.25)
+        person_dets = [d for d in raw_dets if d['class_name'] in ('player', 'goalkeeper', 'referee')]
+        ball_dets = [d for d in raw_dets if d['class_name'] == 'ball']
+
+        if len(person_dets) == 0:
+            MATCH_STATUS["frame_idx"] = frame_n
+            processed += 1
+            continue
+
+        bt_input = [(d['x1'], d['y1'], d['x2'], d['y2'], d['confidence']) for d in person_dets]
+        tracked = tracker.update(bt_input)
+
+        needs_team = (
+            (not team_assignments and len(tracked) >= 4) or
+            (processed % int(fps * 3) == 0 and len(tracked) >= 4)
+        )
+        if needs_team:
+            dets_for_team = [(t[0], t[1], t[2], t[3], t[5]) for t in tracked]
+            tids_for_team = [t[4] for t in tracked]
+            new_teams = team_cls.fit_predict_teams(frame, dets_for_team, tids_for_team)
+            team_assignments.update(new_teams)
+
+        players = []
+        for t in tracked:
+            x1, y1, x2, y2, tid, conf = t
+            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+            pitch_x, pitch_y = homography.pixel_to_pitch(cx, cy)
+            pitch_x = max(0, min(105.0, pitch_x))
+            pitch_y = max(0, min(68.0, pitch_y))
+
+            best_cls = 'player'
+            best_dist = 9999
+            for d in person_dets:
+                dx = (d['x1'] + d['x2'])/2 - cx
+                dy = (d['y1'] + d['y2'])/2 - cy
+                dist = dx*dx + dy*dy
+                if dist < best_dist:
+                    best_dist = dist
+                    best_cls = d['class_name']
+
+            speed = 0.0
+            if int(tid) in player_history:
+                prev = player_history[int(tid)]
+                dt = timestamp - prev[2]
+                if dt > 0.02:
+                    d = np.sqrt((pitch_x - prev[0])**2 + (pitch_y - prev[1])**2)
+                    speed = min(d / dt, 12.0)
+            player_history[int(tid)] = (pitch_x, pitch_y, timestamp)
+
+            players.append({
+                'player_id': int(tid),
+                'team': team_assignments.get(int(tid), -1),
+                'class_name': best_cls,
+                'pitch_x': round(float(pitch_x), 2),
+                'pitch_y': round(float(pitch_y), 2),
+                'speed': round(speed, 2),
+                'confidence': round(float(conf), 3),
+            })
+
+        for bd in ball_dets:
+            bx, by = (bd['x1'] + bd['x2'])/2, (bd['y1'] + bd['y2'])/2
+            bpx, bpy = homography.pixel_to_pitch(bx, by)
+            players.append({
+                'player_id': -1,
+                'team': -1,
+                'class_name': 'ball',
+                'pitch_x': round(float(max(0, min(105, bpx))), 2),
+                'pitch_y': round(float(max(0, min(68, bpy))), 2),
+                'speed': 0,
+                'confidence': round(bd['confidence'], 3),
+            })
+
+        field_players = [p for p in players if p['class_name'] in ('player', 'goalkeeper')]
+        if processed % obc_interval == 0 and processed > 0 and len(field_players) >= 2:
+            obc_scores, xg_val = obc_agent.compute_obc(field_players)
+            match_report.update(frame_n, field_players, obc_scores, xg_val)
+
+        max_obc = max(obc_scores.values()) if obc_scores else 0.0
+
+        frame_data = {
+            'frame_idx': frame_n,
+            'players': players,
+            'off_ball': {
+                'player_scores': {str(k): v for k, v in obc_scores.items()},
+                'possession_prob': round(xg_val, 4),
+            },
+            'vram_usage': torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
+        }
+
+        if len(memory["frames"]) > 300:
+            memory["frames"] = memory["frames"][-200:]
+        memory["frames"].append(frame_data)
+
+        if xg_val > 0.15:
+            memory["incidents"].append({
+                'frame': frame_n,
+                'xg': round(xg_val, 4),
+                'type': 'high_xg',
+            })
+
+        MATCH_STATUS["frame_idx"] = frame_n
+        MATCH_STATUS["players_count"] = len(players)
+        MATCH_STATUS["xg"] = round(xg_val, 4)
+        MATCH_STATUS["max_obc"] = round(max_obc, 3)
+
+        processed += 1
+        if processed % 100 == 0:
+            print(f"[Backend] Frame {frame_n} | {len(players)} players | xG={xg_val:.4f} | maxOBC={max_obc:.3f}")
+
+    cap.release()
+    MATCH_STATUS["active"] = False
+
+    report = match_report.generate(fps)
+    MATCH_REPORTS[match_id] = report
+    memory["stats"] = report.get("summary", {})
+
+    report_path = f"data/matches/{match_id}_report.json"
+    os.makedirs("data/matches", exist_ok=True)
+    with open(report_path, 'w') as f:
+        json.dump(report, f, indent=2)
+
+    print(f"[Backend] Done: {processed} frames processed for {match_id}")
+
+
+# --- Routes ---
 
 @app.post("/upload")
 async def upload_video(file: UploadFile = File(...)):
     os.makedirs("data/uploads", exist_ok=True)
     file_path = f"data/uploads/{file.filename}"
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    with open(file_path, "wb") as buf:
+        shutil.copyfileobj(file.file, buf)
     return {"status": "success", "file_path": file_path, "filename": file.filename}
 
+
 @app.post("/match/start")
-async def start_match(video_path: str, match_id: str, background_tasks: BackgroundTasks):
+async def start_match(video_path: str, match_id: str):
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video file not found")
-        
     if MATCH_STATUS["active"]:
         return {"status": "error", "message": "A match is already being processed"}
-        
-    background_tasks.add_task(run_pipeline_thread, video_path, match_id)
+
+    thread = threading.Thread(target=_run_pipeline, args=(video_path, match_id), daemon=True)
+    thread.start()
     return {"status": "success", "match_id": match_id}
+
 
 @app.get("/match/status")
 async def get_status():
     return MATCH_STATUS
 
+
 @app.get("/match/memory/{match_id}")
 async def get_memory(match_id: str):
-    path = f"data/matches/{match_id}_memory.json"
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Match memory not found")
-    with open(path, 'r') as f:
-        import json
-        return json.load(f)
+    if match_id not in MATCH_MEMORY:
+        return {"frames": [], "incidents": [], "stats": {}}
+    return MATCH_MEMORY[match_id]
+
+
+@app.get("/match/report/{match_id}")
+async def get_report(match_id: str):
+    if match_id in MATCH_REPORTS:
+        return MATCH_REPORTS[match_id]
+    path = f"data/matches/{match_id}_report.json"
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    raise HTTPException(status_code=404, detail="Report not found")
+
+
+dashboard_dir = Path(__file__).parent.parent / "dashboard"
+if dashboard_dir.exists():
+    app.mount("/dashboard", StaticFiles(directory=str(dashboard_dir), html=True), name="dashboard")
+
 
 if __name__ == "__main__":
     import uvicorn
