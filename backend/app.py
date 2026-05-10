@@ -229,11 +229,11 @@ def _run_pipeline(video_path: str, match_id: str):
                 memory["frames"] = memory["frames"][-200:]
             memory["frames"].append(frame_data)
 
-            if xg_val > 0.15:
+            if xg_val > 0.01:
                 memory["incidents"].append({
                     'frame': frame_n,
                     'xg': round(xg_val, 4),
-                    'type': 'high_xg',
+                    'type': 'high_xg' if xg_val > 0.05 else 'buildup',
                 })
 
             MATCH_STATUS["frame_idx"] = frame_n

@@ -178,10 +178,11 @@ class MatchReport:
             if pid in obc_scores:
                 self.obc_history[pid].append(obc_scores[pid])
 
-        if xg > 0.15:
+        if xg > 0.01:
             self.key_moments.append({
                 'frame': frame_n,
                 'xg': round(xg, 4),
+                'type': 'high_xg' if xg > 0.05 else 'buildup',
                 'top_player': max(obc_scores, key=obc_scores.get) if obc_scores else None,
                 'top_obc': round(max(obc_scores.values()), 3) if obc_scores else 0,
             })

@@ -274,11 +274,15 @@ function showReport() {
         let currentEvent = null;
         r.key_moments.forEach(m => {
             if (!currentEvent || m.frame - currentEvent.endFrame > 30) {
-                currentEvent = { startFrame: m.frame, endFrame: m.frame, maxXg: m.xg, count: 1 };
+                currentEvent = { startFrame: m.frame, endFrame: m.frame, maxXg: m.xg, count: 1, topPlayer: m.top_player, topObc: m.top_obc, type: m.type || 'high_xg' };
                 events.push(currentEvent);
             } else {
                 currentEvent.endFrame = m.frame;
-                currentEvent.maxXg = Math.max(currentEvent.maxXg, m.xg);
+                if (m.xg > currentEvent.maxXg) {
+                    currentEvent.maxXg = m.xg;
+                    currentEvent.topPlayer = m.top_player;
+                    currentEvent.topObc = m.top_obc;
+                }
                 currentEvent.count++;
             }
         });
@@ -287,10 +291,13 @@ function showReport() {
             const startSec = Math.round(ev.startFrame / 25);
             const endSec = Math.round(ev.endFrame / 25);
             const timeStr = startSec === endSec ? fmtTime(startSec) : `${fmtTime(startSec)} — ${fmtTime(endSec)}`;
-            html += `<div class="moment-card">
+            const typeLabel = ev.type === 'high_xg' ? 'Goal threat' : 'Build-up play';
+            const playerInfo = ev.topPlayer ? ` · Key player: #${ev.topPlayer} (OBC: ${ev.topObc})` : '';
+            const borderColor = ev.maxXg > 0.05 ? 'var(--danger)' : 'var(--warn)';
+            html += `<div class="moment-card" style="border-left-color:${borderColor}">
                 <div class="moment-card-frame">${timeStr}</div>
-                <div class="moment-card-xg">xG: ${ev.maxXg.toFixed(3)}</div>
-                <div class="moment-card-desc">High threat event · ${ev.count} frame${ev.count > 1 ? 's' : ''} · Frames ${ev.startFrame}–${ev.endFrame}</div>
+                <div class="moment-card-xg" style="color:${borderColor}">xG: ${ev.maxXg.toFixed(3)}</div>
+                <div class="moment-card-desc">${typeLabel}${playerInfo} · ${ev.count} frame${ev.count > 1 ? 's' : ''}</div>
             </div>`;
         });
 
