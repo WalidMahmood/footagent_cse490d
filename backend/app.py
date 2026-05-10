@@ -13,6 +13,7 @@ import os
 import shutil
 import threading
 import time
+import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -33,7 +34,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Phase states: idle → loading → processing → done | error
 MATCH_STATUS = {
+    "phase": "idle",       # idle | loading | processing | done | error
     "active": False,
     "frame_idx": 0,
     "match_id": None,
@@ -42,6 +45,8 @@ MATCH_STATUS = {
     "players_count": 0,
     "xg": 0.0,
     "max_obc": 0.0,
+    "progress": 0,         # 0-100
+    "error": None,
 }
 
 MATCH_MEMORY = {}
@@ -53,196 +58,218 @@ _pipeline_lock = threading.Lock()
 def _run_pipeline(video_path: str, match_id: str):
     global MATCH_STATUS
 
+    MATCH_STATUS["phase"] = "loading"
+    print(f"[Backend] Loading models...")
+
     try:
         from main import FootballDetector, OffBallAgent, MatchReport
         from agents.tracking_agent import ByteTrack, TeamClassifier, HomographyCalibrator
     except ImportError as e:
         print(f"[Backend] Import error: {e}")
+        MATCH_STATUS["phase"] = "error"
         MATCH_STATUS["active"] = False
+        MATCH_STATUS["error"] = f"Import error: {e}"
         return
 
-    # active/match_id already set by route handler before thread start
+    try:
+        memory = {"frames": [], "incidents": [], "stats": {}}
+        MATCH_MEMORY[match_id] = memory
 
-    memory = {"frames": [], "incidents": [], "stats": {}}
-    MATCH_MEMORY[match_id] = memory
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        print(f"[Backend] Device: {device}")
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"[Backend] Device: {device}")
+        weights_dir = Path(__file__).parent.parent / 'weights'
+        fb_path = str(weights_dir / 'yolo-football-player-detection.pt')
+        if not Path(fb_path).exists():
+            fb_path = str(Path('F:/footagent/weights/yolo-football-player-detection.pt'))
 
-    weights_dir = Path(__file__).parent.parent / 'weights'
-    fb_path = str(weights_dir / 'yolo-football-player-detection.pt')
-    if not Path(fb_path).exists():
-        fb_path = str(Path('F:/footagent/weights/yolo-football-player-detection.pt'))
+        detector = FootballDetector(weights_path=fb_path)
+        tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=20, max_players=25)
+        team_cls = TeamClassifier(n_clusters=2)
+        homography = HomographyCalibrator()
 
-    detector = FootballDetector(weights_path=fb_path)
-    tracker = ByteTrack(track_thresh=0.25, match_thresh=0.65, track_buffer=20, max_players=25)
-    team_cls = TeamClassifier(n_clusters=2)
-    homography = HomographyCalibrator()
+        gat_path = str(weights_dir / 'gat_temporal.pt')
+        if not Path(gat_path).exists():
+            gat_path = str(Path('F:/footagent/weights/gat_temporal.pt'))
+        obc_agent = OffBallAgent(weights_path=gat_path, device=device)
 
-    gat_path = str(weights_dir / 'gat_temporal.pt')
-    if not Path(gat_path).exists():
-        gat_path = str(Path('F:/footagent/weights/gat_temporal.pt'))
-    obc_agent = OffBallAgent(weights_path=gat_path, device=device)
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"[Backend] Cannot open video: {video_path}")
+            MATCH_STATUS["phase"] = "error"
+            MATCH_STATUS["active"] = False
+            MATCH_STATUS["error"] = f"Cannot open video: {video_path}"
+            return
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"[Backend] Cannot open video: {video_path}")
-        MATCH_STATUS["active"] = False
-        return
+        fps = cap.get(cv2.CAP_PROP_FPS) or 24
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        MATCH_STATUS["fps"] = fps
+        MATCH_STATUS["total_frames"] = total_frames
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 24
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    MATCH_STATUS["fps"] = fps
-    MATCH_STATUS["total_frames"] = total_frames
+        ret, first_frame = cap.read()
+        if ret:
+            homography.auto_calibrate(first_frame.shape)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    ret, first_frame = cap.read()
-    if ret:
-        homography.auto_calibrate(first_frame.shape)
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        # NOW we're actually processing
+        MATCH_STATUS["phase"] = "processing"
+        print(f"[Backend] Models loaded. Starting frame processing.")
 
-    obc_scores = {}
-    xg_val = 0.0
-    team_assignments = {}
-    player_history = {}
-    match_report = MatchReport()
-    processed = 0
-    obc_interval = 15
-    start_frame = 90
+        obc_scores = {}
+        xg_val = 0.0
+        team_assignments = {}
+        player_history = {}
+        match_report = MatchReport()
+        processed = 0
+        obc_interval = 15
+        start_frame = 90
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-    print(f"[Backend] Processing {video_path} ({total_frames} frames @ {fps:.0f}fps)")
+        cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+        print(f"[Backend] Processing {video_path} ({total_frames} frames @ {fps:.0f}fps)")
 
-    while cap.isOpened() and MATCH_STATUS["active"]:
-        ret, frame = cap.read()
-        if not ret:
-            break
+        while cap.isOpened() and MATCH_STATUS["active"]:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-        frame_n = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
-        timestamp = frame_n / fps
+            frame_n = int(cap.get(cv2.CAP_PROP_POS_FRAMES)) - 1
+            timestamp = frame_n / fps
 
-        raw_dets = detector.detect(frame, conf=0.25)
-        person_dets = [d for d in raw_dets if d['class_name'] in ('player', 'goalkeeper', 'referee')]
-        ball_dets = [d for d in raw_dets if d['class_name'] == 'ball']
+            raw_dets = detector.detect(frame, conf=0.25)
+            person_dets = [d for d in raw_dets if d['class_name'] in ('player', 'goalkeeper', 'referee')]
+            ball_dets = [d for d in raw_dets if d['class_name'] == 'ball']
 
-        if len(person_dets) == 0:
+            if len(person_dets) == 0:
+                MATCH_STATUS["frame_idx"] = frame_n
+                MATCH_STATUS["progress"] = min(99, int((frame_n / max(total_frames, 1)) * 100))
+                processed += 1
+                continue
+
+            bt_input = [(d['x1'], d['y1'], d['x2'], d['y2'], d['confidence']) for d in person_dets]
+            tracked = tracker.update(bt_input)
+
+            needs_team = (
+                (not team_assignments and len(tracked) >= 4) or
+                (processed % int(fps * 3) == 0 and len(tracked) >= 4)
+            )
+            if needs_team:
+                dets_for_team = [(t[0], t[1], t[2], t[3], t[5]) for t in tracked]
+                tids_for_team = [t[4] for t in tracked]
+                new_teams = team_cls.fit_predict_teams(frame, dets_for_team, tids_for_team)
+                team_assignments.update(new_teams)
+
+            players = []
+            for t in tracked:
+                x1, y1, x2, y2, tid, conf = t
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                pitch_x, pitch_y = homography.pixel_to_pitch(cx, cy)
+                pitch_x = max(0, min(105.0, pitch_x))
+                pitch_y = max(0, min(68.0, pitch_y))
+
+                best_cls = 'player'
+                best_dist = 9999
+                for d in person_dets:
+                    dx = (d['x1'] + d['x2'])/2 - cx
+                    dy = (d['y1'] + d['y2'])/2 - cy
+                    dist = dx*dx + dy*dy
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_cls = d['class_name']
+
+                speed = 0.0
+                if int(tid) in player_history:
+                    prev = player_history[int(tid)]
+                    dt = timestamp - prev[2]
+                    if dt > 0.02:
+                        d = np.sqrt((pitch_x - prev[0])**2 + (pitch_y - prev[1])**2)
+                        speed = min(d / dt, 12.0)
+                player_history[int(tid)] = (pitch_x, pitch_y, timestamp)
+
+                players.append({
+                    'player_id': int(tid),
+                    'team': team_assignments.get(int(tid), -1),
+                    'class_name': best_cls,
+                    'pitch_x': round(float(pitch_x), 2),
+                    'pitch_y': round(float(pitch_y), 2),
+                    'speed': round(speed, 2),
+                    'confidence': round(float(conf), 3),
+                })
+
+            for bd in ball_dets:
+                bx, by = (bd['x1'] + bd['x2'])/2, (bd['y1'] + bd['y2'])/2
+                bpx, bpy = homography.pixel_to_pitch(bx, by)
+                players.append({
+                    'player_id': -1,
+                    'team': -1,
+                    'class_name': 'ball',
+                    'pitch_x': round(float(max(0, min(105, bpx))), 2),
+                    'pitch_y': round(float(max(0, min(68, bpy))), 2),
+                    'speed': 0,
+                    'confidence': round(bd['confidence'], 3),
+                })
+
+            field_players = [p for p in players if p['class_name'] in ('player', 'goalkeeper')]
+            if processed % obc_interval == 0 and processed > 0 and len(field_players) >= 2:
+                obc_scores, xg_val = obc_agent.compute_obc(field_players)
+                match_report.update(frame_n, field_players, obc_scores, xg_val)
+
+            max_obc = max(obc_scores.values()) if obc_scores else 0.0
+
+            frame_data = {
+                'frame_idx': frame_n,
+                'players': players,
+                'off_ball': {
+                    'player_scores': {str(k): v for k, v in obc_scores.items()},
+                    'possession_prob': round(xg_val, 4),
+                },
+                'vram_usage': torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
+            }
+
+            if len(memory["frames"]) > 300:
+                memory["frames"] = memory["frames"][-200:]
+            memory["frames"].append(frame_data)
+
+            if xg_val > 0.15:
+                memory["incidents"].append({
+                    'frame': frame_n,
+                    'xg': round(xg_val, 4),
+                    'type': 'high_xg',
+                })
+
             MATCH_STATUS["frame_idx"] = frame_n
+            MATCH_STATUS["players_count"] = len(players)
+            MATCH_STATUS["xg"] = round(xg_val, 4)
+            MATCH_STATUS["max_obc"] = round(max_obc, 3)
+            MATCH_STATUS["progress"] = min(99, int((frame_n / max(total_frames, 1)) * 100))
+
             processed += 1
-            continue
+            if processed % 100 == 0:
+                pct = int((frame_n / max(total_frames, 1)) * 100)
+                print(f"[Backend] Frame {frame_n}/{total_frames} ({pct}%) | {len(players)} players | xG={xg_val:.4f} | maxOBC={max_obc:.3f}")
 
-        bt_input = [(d['x1'], d['y1'], d['x2'], d['y2'], d['confidence']) for d in person_dets]
-        tracked = tracker.update(bt_input)
+        cap.release()
 
-        needs_team = (
-            (not team_assignments and len(tracked) >= 4) or
-            (processed % int(fps * 3) == 0 and len(tracked) >= 4)
-        )
-        if needs_team:
-            dets_for_team = [(t[0], t[1], t[2], t[3], t[5]) for t in tracked]
-            tids_for_team = [t[4] for t in tracked]
-            new_teams = team_cls.fit_predict_teams(frame, dets_for_team, tids_for_team)
-            team_assignments.update(new_teams)
+        match_report.set_frame_count(processed)
+        report = match_report.generate(fps)
+        MATCH_REPORTS[match_id] = report
+        memory["stats"] = report.get("summary", {})
 
-        players = []
-        for t in tracked:
-            x1, y1, x2, y2, tid, conf = t
-            cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
-            pitch_x, pitch_y = homography.pixel_to_pitch(cx, cy)
-            pitch_x = max(0, min(105.0, pitch_x))
-            pitch_y = max(0, min(68.0, pitch_y))
+        report_path = f"data/matches/{match_id}_report.json"
+        os.makedirs("data/matches", exist_ok=True)
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
 
-            best_cls = 'player'
-            best_dist = 9999
-            for d in person_dets:
-                dx = (d['x1'] + d['x2'])/2 - cx
-                dy = (d['y1'] + d['y2'])/2 - cy
-                dist = dx*dx + dy*dy
-                if dist < best_dist:
-                    best_dist = dist
-                    best_cls = d['class_name']
+        MATCH_STATUS["phase"] = "done"
+        MATCH_STATUS["active"] = False
+        MATCH_STATUS["progress"] = 100
+        print(f"[Backend] Done: {processed} frames processed for {match_id}")
 
-            speed = 0.0
-            if int(tid) in player_history:
-                prev = player_history[int(tid)]
-                dt = timestamp - prev[2]
-                if dt > 0.02:
-                    d = np.sqrt((pitch_x - prev[0])**2 + (pitch_y - prev[1])**2)
-                    speed = min(d / dt, 12.0)
-            player_history[int(tid)] = (pitch_x, pitch_y, timestamp)
-
-            players.append({
-                'player_id': int(tid),
-                'team': team_assignments.get(int(tid), -1),
-                'class_name': best_cls,
-                'pitch_x': round(float(pitch_x), 2),
-                'pitch_y': round(float(pitch_y), 2),
-                'speed': round(speed, 2),
-                'confidence': round(float(conf), 3),
-            })
-
-        for bd in ball_dets:
-            bx, by = (bd['x1'] + bd['x2'])/2, (bd['y1'] + bd['y2'])/2
-            bpx, bpy = homography.pixel_to_pitch(bx, by)
-            players.append({
-                'player_id': -1,
-                'team': -1,
-                'class_name': 'ball',
-                'pitch_x': round(float(max(0, min(105, bpx))), 2),
-                'pitch_y': round(float(max(0, min(68, bpy))), 2),
-                'speed': 0,
-                'confidence': round(bd['confidence'], 3),
-            })
-
-        field_players = [p for p in players if p['class_name'] in ('player', 'goalkeeper')]
-        if processed % obc_interval == 0 and processed > 0 and len(field_players) >= 2:
-            obc_scores, xg_val = obc_agent.compute_obc(field_players)
-            match_report.update(frame_n, field_players, obc_scores, xg_val)
-
-        max_obc = max(obc_scores.values()) if obc_scores else 0.0
-
-        frame_data = {
-            'frame_idx': frame_n,
-            'players': players,
-            'off_ball': {
-                'player_scores': {str(k): v for k, v in obc_scores.items()},
-                'possession_prob': round(xg_val, 4),
-            },
-            'vram_usage': torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0,
-        }
-
-        if len(memory["frames"]) > 300:
-            memory["frames"] = memory["frames"][-200:]
-        memory["frames"].append(frame_data)
-
-        if xg_val > 0.15:
-            memory["incidents"].append({
-                'frame': frame_n,
-                'xg': round(xg_val, 4),
-                'type': 'high_xg',
-            })
-
-        MATCH_STATUS["frame_idx"] = frame_n
-        MATCH_STATUS["players_count"] = len(players)
-        MATCH_STATUS["xg"] = round(xg_val, 4)
-        MATCH_STATUS["max_obc"] = round(max_obc, 3)
-
-        processed += 1
-        if processed % 100 == 0:
-            print(f"[Backend] Frame {frame_n} | {len(players)} players | xG={xg_val:.4f} | maxOBC={max_obc:.3f}")
-
-    cap.release()
-    MATCH_STATUS["active"] = False
-
-    match_report.set_frame_count(processed)
-    report = match_report.generate(fps)
-    MATCH_REPORTS[match_id] = report
-    memory["stats"] = report.get("summary", {})
-
-    report_path = f"data/matches/{match_id}_report.json"
-    os.makedirs("data/matches", exist_ok=True)
-    with open(report_path, 'w') as f:
-        json.dump(report, f, indent=2)
-
-    print(f"[Backend] Done: {processed} frames processed for {match_id}")
+    except Exception as e:
+        traceback.print_exc()
+        MATCH_STATUS["phase"] = "error"
+        MATCH_STATUS["active"] = False
+        MATCH_STATUS["error"] = str(e)
+        print(f"[Backend] Pipeline error: {e}")
 
 
 # --- Routes ---
@@ -263,13 +290,17 @@ async def start_match(video_path: str, match_id: str):
     if MATCH_STATUS["active"]:
         return {"status": "error", "message": "A match is already being processed"}
 
-    # Set active BEFORE thread starts to avoid race with pollStatus
+    # Set state BEFORE thread starts — prevents poll race condition
     MATCH_STATUS["active"] = True
+    MATCH_STATUS["phase"] = "loading"
     MATCH_STATUS["match_id"] = match_id
     MATCH_STATUS["frame_idx"] = 0
+    MATCH_STATUS["total_frames"] = 0
     MATCH_STATUS["players_count"] = 0
     MATCH_STATUS["xg"] = 0.0
     MATCH_STATUS["max_obc"] = 0.0
+    MATCH_STATUS["progress"] = 0
+    MATCH_STATUS["error"] = None
 
     thread = threading.Thread(target=_run_pipeline, args=(video_path, match_id), daemon=True)
     thread.start()

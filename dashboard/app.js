@@ -3,6 +3,7 @@ let isRunning = false;
 let matchData = null;
 let currentFrameIdx = 0;
 let totalFrames = 0;
+let currentMatchId = null;
 
 // ── Upload ──────────────────────────────────────────────
 document.getElementById('video-upload').addEventListener('change', async (e) => {
@@ -39,24 +40,34 @@ async function startMatch(videoPath, matchId) {
         const resp = await fetch(`${API_URL}/match/start?video_path=${encodeURIComponent(videoPath)}&match_id=${matchId}`, { method: 'POST' });
         const data = await resp.json();
         if (data.status === 'success') {
-            addLog(`Pipeline started: ${matchId}`);
+            currentMatchId = matchId;
             isRunning = true;
-            setStatus('live');
+            setStatus('loading');
             hideIdleHint();
-            // Give backend thread time to initialize before first poll
-            setTimeout(() => pollStatus(matchId), 1500);
+            clearPlayers();  // clear old 3D players
+            addLog(`Pipeline started: ${matchId}`);
+            // Start polling — backend is loading models, phase will be "loading"
+            setTimeout(() => pollStatus(), 800);
+        } else {
+            addLog(`Start error: ${data.message || 'unknown'}`);
         }
     } catch (err) {
-        addLog(`Error: ${err.message}`);
+        addLog(`Connection error: ${err.message}`);
     }
 }
 
-async function pollStatus(matchId) {
+async function pollStatus() {
     if (!isRunning) return;
+
     try {
         const resp = await fetch(`${API_URL}/match/status`);
         const status = await resp.json();
+        const phase = status.phase || 'idle';
+        const matchId = currentMatchId || status.match_id;
 
+        console.log(`[Poll] phase=${phase} frame=${status.frame_idx} players=${status.players_count} progress=${status.progress}%`);
+
+        // Update topbar metrics
         document.getElementById('frame-val').innerText = status.frame_idx || 0;
         document.getElementById('players-val').innerText = status.players_count || 0;
         document.getElementById('xg-val').innerText = (status.xg || 0).toFixed(3);
@@ -64,26 +75,53 @@ async function pollStatus(matchId) {
         currentFrameIdx = status.frame_idx || 0;
         totalFrames = status.total_frames || 0;
 
-        // Update FPS and VRAM in topbar if elements exist
         const fpsEl = document.getElementById('fps-val');
-        if (fpsEl) fpsEl.innerText = status.fps ? status.fps.toFixed(0) : 'N/A';
+        if (fpsEl) fpsEl.innerText = status.fps ? Math.round(status.fps) : 'N/A';
 
-        if (status.active) {
-            fetchLatestMemory(matchId || status.match_id);
-            setTimeout(() => pollStatus(matchId), 600);
-        } else if (status.frame_idx > 0) {
-            // Only mark complete if we actually processed frames
+        // Update progress bar
+        if (status.progress > 0) {
+            document.getElementById('scrubber-fill').style.width = `${status.progress}%`;
+        }
+
+        if (phase === 'loading') {
+            // Models still loading — show loading state, keep polling
+            setStatus('loading');
+            document.getElementById('upload-status').innerText = "Loading models (YOLO, GAT, ByteTrack)...";
+            setTimeout(() => pollStatus(), 1000);
+
+        } else if (phase === 'processing') {
+            // Active processing — update UI with live data
+            setStatus('live');
+            const pct = status.progress || 0;
+            document.getElementById('upload-status').innerText = `Processing... ${pct}%`;
+            fetchLatestMemory(matchId);
+            setTimeout(() => pollStatus(), 500);
+
+        } else if (phase === 'done') {
+            // Finished!
             isRunning = false;
-            setStatus('offline');
-            addLog("Processing complete");
-            fetchLatestMemory(matchId || status.match_id);
-            fetchReport(matchId || status.match_id);
+            setStatus('done');
+            document.getElementById('upload-status').innerText = "Processing complete!";
+            addLog(`Processing complete — ${status.frame_idx} frames`);
+            fetchLatestMemory(matchId);
+            fetchReport(matchId);
+
+        } else if (phase === 'error') {
+            // Error occurred
+            isRunning = false;
+            setStatus('error');
+            const errMsg = status.error || 'Unknown error';
+            document.getElementById('upload-status').innerText = `Error: ${errMsg}`;
+            addLog(`Pipeline error: ${errMsg}`);
+
         } else {
-            // Still waiting for first frame, keep polling
-            setTimeout(() => pollStatus(matchId), 1000);
+            // Unknown/idle — keep polling briefly in case of timing
+            setTimeout(() => pollStatus(), 1500);
         }
     } catch (err) {
-        setTimeout(() => pollStatus(matchId), 2000);
+        console.error('[Poll] Network error:', err);
+        // Network error — retry
+        setTimeout(() => pollStatus(), 2000);
     }
 }
 
@@ -93,23 +131,33 @@ async function fetchLatestMemory(matchId) {
         const memory = await resp.json();
         matchData = memory;
 
-        if (!memory.frames || memory.frames.length === 0) return;
+        if (!memory.frames || memory.frames.length === 0) {
+            console.log('[Memory] No frames yet');
+            return;
+        }
 
         const lastFrame = memory.frames[memory.frames.length - 1];
-        totalFrames = memory.frames.length;
+        console.log(`[Memory] ${memory.frames.length} frames, last has ${(lastFrame.players||[]).length} players`);
 
         updatePlayerList(lastFrame);
         update3DScene(lastFrame);
         updateMetrics(lastFrame, memory);
         updateScrubber(memory);
-    } catch (err) { /* server may not be ready */ }
+    } catch (err) {
+        console.error('[Memory] Fetch error:', err);
+    }
 }
 
 async function fetchReport(matchId) {
     try {
         const resp = await fetch(`${API_URL}/match/report/${matchId}`);
-        if (!resp.ok) return;
+        if (!resp.ok) {
+            addLog("Report not available yet");
+            return;
+        }
         const report = await resp.json();
+        console.log('[Report]', report);
+
         if (report.summary) {
             document.getElementById('report-duration').innerText = `${report.summary.duration_sec}s`;
             document.getElementById('report-moments').innerText = report.summary.key_moments;
@@ -120,7 +168,9 @@ async function fetchReport(matchId) {
             renderTopOBC(report.top_obc_players.slice(0,5).map(p => [String(p.player_id), p.avg_obc, p.class]));
         }
         addLog("Match report loaded");
-    } catch (err) { /* report may not be ready */ }
+    } catch (err) {
+        console.error('[Report] Fetch error:', err);
+    }
 }
 
 // ── Render functions ────────────────────────────────────
@@ -158,9 +208,9 @@ function updatePlayerList(frame) {
 }
 
 function update3DScene(frame) {
-    const players = frame.players || [];
+    const framePlayers = frame.players || [];
     const scores = (frame.off_ball && frame.off_ball.player_scores) || {};
-    players.forEach(p => {
+    framePlayers.forEach(p => {
         const score = scores[String(p.player_id)] || 0;
         updatePlayer(p.player_id, p.team, p.pitch_x, p.pitch_y, score, p.class_name);
     });
@@ -174,18 +224,20 @@ function updateMetrics(frame, memory) {
     document.getElementById('xg-val').innerText = (ob.possession_prob || 0).toFixed(3);
     document.getElementById('obc-val').innerText = maxObc.toFixed(3);
 
-    if (frame.vram_usage) {
+    if (frame.vram_usage !== undefined) {
         document.getElementById('vram-val').innerText = `${frame.vram_usage.toFixed(1)} GB`;
     }
 
-    if (memory.frames) {
-        document.getElementById('report-duration').innerText = `${Math.round(memory.frames.length / 24)}s`;
+    if (memory.frames && memory.frames.length > 0) {
+        const fps = totalFrames > 0 ? (currentFrameIdx / Math.max(memory.frames.length, 1)) * memory.frames.length : 24;
+        const durSec = Math.round(currentFrameIdx / 25);
+        document.getElementById('report-duration').innerText = `${durSec}s`;
     }
 
     const incidents = memory.incidents || [];
     document.getElementById('report-moments').innerText = incidents.length;
 
-    // Top OBC live
+    // Top OBC live update
     const top5 = Object.entries(scores).sort((a,b) => b[1]-a[1]).slice(0,5);
     if (top5.length) renderTopOBC(top5.map(([pid, s]) => [pid, s, null]));
 
@@ -222,19 +274,16 @@ function renderTopOBC(entries) {
 
 function updateScrubber(memory) {
     if (!memory.frames || !memory.frames.length) return;
-    const total = memory.frames.length;
-    const pct = ((currentFrameIdx / Math.max(total,1)) * 100).toFixed(1);
-    document.getElementById('scrubber-fill').style.width = `${pct}%`;
 
-    const totalSec = Math.round(total / 24);
-    const currentSec = Math.round(currentFrameIdx / 24);
+    const totalSec = Math.round(totalFrames / 25);
+    const currentSec = Math.round(currentFrameIdx / 25);
     document.getElementById('scrub-current').innerText = fmtTime(currentSec);
     document.getElementById('scrub-total').innerText = fmtTime(totalSec);
 
     const markers = document.getElementById('scrubber-markers');
     markers.innerHTML = '';
     (memory.incidents || []).forEach(inc => {
-        const pos = ((inc.frame / Math.max(total,1)) * 100).toFixed(1);
+        const pos = ((inc.frame / Math.max(totalFrames, 1)) * 100).toFixed(1);
         const m = document.createElement('div');
         m.className = 'scrubber-marker';
         m.style.left = `${pos}%`;
@@ -250,9 +299,18 @@ function fmtTime(sec) {
 
 function setStatus(mode) {
     const badge = document.getElementById('status-badge');
-    if (mode === 'live') {
+    if (mode === 'loading') {
+        badge.innerText = 'LOADING';
+        badge.className = 'status-badge status-live';
+    } else if (mode === 'live') {
         badge.innerText = 'PROCESSING';
         badge.className = 'status-badge status-live';
+    } else if (mode === 'done') {
+        badge.innerText = 'COMPLETE';
+        badge.className = 'status-badge status-done';
+    } else if (mode === 'error') {
+        badge.innerText = 'ERROR';
+        badge.className = 'status-badge status-error';
     } else {
         badge.innerText = 'OFFLINE';
         badge.className = 'status-badge status-offline';
