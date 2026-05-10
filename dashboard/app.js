@@ -43,7 +43,8 @@ async function startMatch(videoPath, matchId) {
             isRunning = true;
             setStatus('live');
             hideIdleHint();
-            pollStatus(matchId);
+            // Give backend thread time to initialize before first poll
+            setTimeout(() => pollStatus(matchId), 1500);
         }
     } catch (err) {
         addLog(`Error: ${err.message}`);
@@ -61,16 +62,25 @@ async function pollStatus(matchId) {
         document.getElementById('xg-val').innerText = (status.xg || 0).toFixed(3);
         document.getElementById('obc-val').innerText = (status.max_obc || 0).toFixed(3);
         currentFrameIdx = status.frame_idx || 0;
+        totalFrames = status.total_frames || 0;
+
+        // Update FPS and VRAM in topbar if elements exist
+        const fpsEl = document.getElementById('fps-val');
+        if (fpsEl) fpsEl.innerText = status.fps ? status.fps.toFixed(0) : 'N/A';
 
         if (status.active) {
             fetchLatestMemory(matchId || status.match_id);
-            setTimeout(() => pollStatus(matchId), 400);
-        } else {
+            setTimeout(() => pollStatus(matchId), 600);
+        } else if (status.frame_idx > 0) {
+            // Only mark complete if we actually processed frames
             isRunning = false;
             setStatus('offline');
             addLog("Processing complete");
             fetchLatestMemory(matchId || status.match_id);
             fetchReport(matchId || status.match_id);
+        } else {
+            // Still waiting for first frame, keep polling
+            setTimeout(() => pollStatus(matchId), 1000);
         }
     } catch (err) {
         setTimeout(() => pollStatus(matchId), 2000);

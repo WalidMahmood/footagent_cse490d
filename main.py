@@ -132,7 +132,10 @@ class OffBallAgent:
             emb = self.model.bn2(emb)
 
             mags = torch.norm(emb, dim=1)
-            mags_norm = mags / (mags.max() + 1e-8)
+            # Sigmoid normalization: meaningful [0,1] distribution
+            # max-norm always made the top player exactly 1.000
+            mags_centered = mags - mags.mean()
+            mags_norm = torch.sigmoid(mags_centered * 2.5)
 
         scores = {}
         for i, p in enumerate(players):

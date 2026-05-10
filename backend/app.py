@@ -61,9 +61,7 @@ def _run_pipeline(video_path: str, match_id: str):
         MATCH_STATUS["active"] = False
         return
 
-    MATCH_STATUS["active"] = True
-    MATCH_STATUS["match_id"] = match_id
-    MATCH_STATUS["frame_idx"] = 0
+    # active/match_id already set by route handler before thread start
 
     memory = {"frames": [], "incidents": [], "stats": {}}
     MATCH_MEMORY[match_id] = memory
@@ -264,6 +262,14 @@ async def start_match(video_path: str, match_id: str):
         raise HTTPException(status_code=404, detail="Video file not found")
     if MATCH_STATUS["active"]:
         return {"status": "error", "message": "A match is already being processed"}
+
+    # Set active BEFORE thread starts to avoid race with pollStatus
+    MATCH_STATUS["active"] = True
+    MATCH_STATUS["match_id"] = match_id
+    MATCH_STATUS["frame_idx"] = 0
+    MATCH_STATUS["players_count"] = 0
+    MATCH_STATUS["xg"] = 0.0
+    MATCH_STATUS["max_obc"] = 0.0
 
     thread = threading.Thread(target=_run_pipeline, args=(video_path, match_id), daemon=True)
     thread.start()
